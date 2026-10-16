@@ -88,19 +88,20 @@ async fn pair(phone: Option<String>) -> Result<()> {
             ..Default::default()
         });
     }
-    let bot = builder
+    let mut bot = builder
         .build()
         .await
-        .map_err(|e| anyhow!("starting WhatsApp client: {e}"))?;
+        .map_err(|e| anyhow!("starting WhatsApp client: {e}"))?
+        .spawn();
     tokio::select! {
-        reason = bot.run() => bail!("WhatsApp client stopped before linking: {reason:?}"),
-        _ = done_rx.recv() => {
-            // Let the session finish persisting before exiting.
-            tokio::time::sleep(Duration::from_secs(5)).await;
-            println!("Linked. Start the sidecar with: hermes whatsapp-voice serve");
-            Ok(())
-        }
+        reason = &mut bot => bail!("WhatsApp client stopped before linking: {reason:?}"),
+        _ = done_rx.recv() => {}
     }
+    // Let post-login setup finish, then shut down cleanly: only shutdown() saves the new session.
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    bot.shutdown().await;
+    println!("Linked. Start the sidecar with: hermes whatsapp-voice serve");
+    Ok(())
 }
 
 struct CallObserver {
@@ -151,7 +152,7 @@ impl EventHandler for CallObserver {
 
 async fn serve() -> Result<()> {
     let cfg = Config::from_env()?;
-    let bot = Bot::builder()
+    let mut bot = Bot::builder()
         .with_backend(open_store().await?)
         .on_qr_code(|_, _| async {
             log::error!("not linked to WhatsApp yet; run: hermes whatsapp-voice pair");
@@ -165,7 +166,8 @@ async fn serve() -> Result<()> {
         })
         .build()
         .await
-        .map_err(|e| anyhow!("starting WhatsApp client: {e}"))?;
+        .map_err(|e| anyhow!("starting WhatsApp client: {e}"))?
+        .spawn();
     let bridge = Arc::new(Bridge::new(cfg, bot.client()));
     let _subscription = bot.client().subscribe_handler(Arc::new(CallObserver {
         bridge: bridge.clone(),
@@ -174,9 +176,12 @@ async fn serve() -> Result<()> {
         log::warn!("API_SERVER_KEY not set: calls work, but the voice agent cannot reach Hermes");
     }
 
-    tokio::select! {
-        reason = bot.run() => bail!("WhatsApp client stopped: {reason:?}"),
+    let res = tokio::select! {
+        reason = &mut bot => bail!("WhatsApp client stopped: {reason:?}"),
         res = server::serve(bridge) => res,
-        _ = tokio::signal::ctrl_c() => Ok(()),
-    }
+        _ = shutdown_signal() => Ok(()),
+    };
+    // Saves the device session and encryption state; exiting without it can lose them.
+    bot.shutdown().await;
+    res
 }
