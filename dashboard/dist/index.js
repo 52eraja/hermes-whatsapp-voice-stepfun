@@ -42,6 +42,7 @@
       { key: "hermes", ok: status.hermes_api_key, label: "Hermes API", hint: "Set API_SERVER_ENABLED=true and an API_SERVER_KEY (Keys page), then restart the gateway." },
       { key: "linked", ok: !!(s && s.logged_in) || status.pairing === "linked", label: "WhatsApp linked", hint: "Link the bot's WhatsApp number once." },
       { key: "sidecar", ok: !!s, label: "Sidecar", hint: "Not running. Restart it, or install the background service: hermes whatsapp-voice service." },
+      { key: "test", ok: status.tested, label: "Test call", hint: "Have the bot call your phone to check everything works end to end." },
     ];
   }
 
@@ -91,6 +92,23 @@
     );
   }
 
+  function TestCall({ ready }) {
+    const [note, setNote] = useState(null);
+    const call = () => {
+      setNote(null);
+      post("/call", { reason: "A quick test call to check the voice line works." })
+        .then(() => setNote("Calling your phone… pick up, then say bye."))
+        .catch((e) => setNote(message(e)));
+    };
+    return h(
+      "div",
+      { style: { marginTop: ".75rem" } },
+      h(Button, { size: "sm", disabled: !ready, onClick: call }, "Call me"),
+      !ready && h("div", { className: "hwv-step-hint" }, "Available once the steps above are done."),
+      note && h("div", { className: "hwv-step-hint" }, note),
+    );
+  }
+
   function Setup({ checks, onRestart, restarting }) {
     const missing = checks.filter((c) => !c.ok);
     if (missing.length === 0) return null;
@@ -107,7 +125,7 @@
               "li",
               { key: c.key, className: "hwv-step" },
               h("span", { className: "hwv-dot is-off" }),
-              h("div", null, h("div", { className: "hwv-step-title" }, c.label), h("div", { className: "hwv-step-hint" }, c.hint), c.key === "linked" && h(Pairing)),
+              h("div", null, h("div", { className: "hwv-step-title" }, c.label), h("div", { className: "hwv-step-hint" }, c.hint), c.key === "linked" && h(Pairing), c.key === "test" && h(TestCall, { ready: checks.every((x) => x.ok || x.key === "test") })),
               c.key === "sidecar"
                 ? h(Button, { size: "sm", variant: "outline", disabled: restarting, onClick: onRestart }, restarting ? "Restarting…" : "Restart")
                 : h("span"),

@@ -67,9 +67,16 @@ def status():
         "pairing": _pair_state(),
     }
     try:
-        out["sidecar"] = _client().health()
+        client = _client()
+        out["sidecar"] = client.health()
+        # The setup checklist ends with a test call; remember the first completed call, since the
+        # sidecar's call history is lost on restart.
+        flag = sc.data_dir() / "test-call-done"
+        if not flag.exists() and any(c.get("status") == "completed" for c in client.recent_calls(20)):
+            flag.touch()
     except sc.SidecarError as e:
         out["sidecar_error"] = str(e)
+    out["tested"] = (sc.data_dir() / "test-call-done").exists()
     return out
 
 
