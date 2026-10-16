@@ -175,6 +175,10 @@ async fn serve() -> Result<()> {
     if bridge.cfg.hermes_api_key.is_empty() {
         log::warn!("API_SERVER_KEY not set: calls work, but the voice agent cannot reach Hermes");
     }
+    tokio::spawn({
+        let bridge = bridge.clone();
+        async move { bridge.refresh_persona().await }
+    });
 
     let res = tokio::select! {
         reason = &mut bot => bail!("WhatsApp client stopped: {reason:?}"),

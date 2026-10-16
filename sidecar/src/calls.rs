@@ -222,6 +222,8 @@ pub struct Bridge {
     pub calls: Calls,
     pub ring_signals: RingSignals,
     hermes: Option<Hermes>,
+    /// Hermes's own briefing on who it is and who the owner is; empty until fetched.
+    persona: Mutex<String>,
 }
 
 impl Bridge {
@@ -234,6 +236,7 @@ impl Bridge {
             calls: Calls::default(),
             hermes,
             ring_signals: RingSignals::default(),
+            persona: Mutex::default(),
         }
     }
 
@@ -396,8 +399,34 @@ impl Bridge {
         .await;
     }
 
+    /// Asks Hermes for a short briefing so the voice model shares its name, persona and memory.
+    /// Fetched ahead of time so answering a call never waits on it.
+    pub async fn refresh_persona(&self) {
+        let Some(h) = &self.hermes else { return };
+        let prompt = "A voice version of you is about to talk with the owner on a WhatsApp call, and it \
+            knows only what you write here. In under 150 words of plain sentences, tell it: your name and \
+            personality as you present yourself, how the owner likes to be spoken to (including \
+            language), and the few facts about the owner and their current priorities it should know. \
+            Write it as instructions to that voice (\"You are ...\").";
+        match h
+            .run(
+                prompt,
+                "Reply in plain text only.",
+                "whatsapp-voice-briefing",
+                HERMES_TIMEOUT,
+            )
+            .await
+        {
+            Ok(text) if !text.trim().is_empty() => {
+                *self.persona.lock().unwrap() = text.trim().to_string()
+            }
+            Ok(_) => {}
+            Err(e) => log::warn!("could not fetch persona briefing from Hermes: {e:#}"),
+        }
+    }
+
     fn setup(&self, context: &str) -> Setup {
-        let name = &self.cfg.assistant_name;
+        let persona = self.persona.lock().unwrap().clone();
         let tools_note = if self.hermes.is_some() {
             "You are the voice of Hermes, the owner's agent, which has their memory, files, calendar, \
              reminders, messages and tools. For any action, or any fact you do not already know, call \
@@ -407,15 +436,8 @@ impl Bridge {
         } else {
             "You cannot take actions or look things up during this call; say so if asked."
         };
-        let system_instruction = format!(
-            "You are {name}, the owner's personal assistant, talking with them on a live WhatsApp \
-             voice call.\n\
-             - This is a phone call: speak naturally and keep replies short. No lists, markdown, \
-             links or emoji.\n\
-             - {tools_note}\n\
-             - When the conversation is clearly finished, say a short goodbye and then call end_call.\n\n\
-             {context}"
-        );
+        let system_instruction =
+            system_instruction(&self.cfg.assistant_name, &persona, tools_note, context);
         let mut functions = vec![json!({
             "name": "end_call",
             "description": "Hang up the call. Call it only after you have said goodbye.",
@@ -593,6 +615,8 @@ impl Bridge {
         log::info!("call {id}: {end_reason}");
         self.calls.finish(id, Status::Completed, end_reason);
         self.send_summary(id).await;
+        // Memory may have changed during the call (e.g. a new preference); the next call should know.
+        self.refresh_persona().await;
     }
 
     /// After a call: let Hermes digest the transcript, then message the owner a summary.
@@ -652,6 +676,23 @@ impl Bridge {
             log::warn!("call {id}: could not send summary: {e}");
         }
     }
+}
+
+fn system_instruction(name: &str, persona: &str, tools_note: &str, context: &str) -> String {
+    let identity = if persona.is_empty() {
+        format!("You are {name}, the owner's personal assistant.")
+    } else {
+        format!(
+            "Hermes describes who you are and who the owner is; stay in that character:\n{persona}"
+        )
+    };
+    format!(
+        "{identity}\n\nYou are talking with the owner on a live WhatsApp voice call.\n\
+         - This is a phone call: speak naturally and keep replies short. No lists, markdown, links or emoji.\n\
+         - {tools_note}\n\
+         - When the conversation is clearly finished, say a short goodbye and then call end_call.\n\n\
+         {context}"
+    )
 }
 
 fn truncate(s: &str, max: usize) -> String {
@@ -719,6 +760,17 @@ mod tests {
 
         signals.stop();
         assert!(signals.subscribe("C1").is_none());
+    }
+
+    #[test]
+    fn persona_replaces_the_default_identity() {
+        let plain = system_instruction("Hermes", "", "tools", "ctx");
+        assert!(plain.starts_with("You are Hermes, the owner's personal assistant."));
+        let briefed =
+            system_instruction("Hermes", "You are Nova. Speak Spanish.", "tools", "ctx");
+        assert!(briefed.contains("You are Nova. Speak Spanish."));
+        assert!(!briefed.contains("You are Hermes"));
+        assert!(briefed.ends_with("ctx"));
     }
 
     #[test]

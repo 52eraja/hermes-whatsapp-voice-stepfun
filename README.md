@@ -158,7 +158,9 @@ Restart the sidecar after changing settings.
   - WhatsApp servers (signaling and call media relays).
   - `generativelanguage.googleapis.com`, which receives call audio during calls, using
     `GEMINI_API_KEY`.
-  - Your local Hermes API server, for `ask_hermes` and the post-call summary, using `API_SERVER_KEY`.
+  - Your local Hermes API server, for `ask_hermes`, the post-call summary, and a short persona
+    briefing (Hermes's name, personality and what it knows about you) fetched at startup and after
+    each call so the voice matches your Hermes. Uses `API_SERVER_KEY`.
   - `github.com`, only when `install` downloads a release.
 
   Nothing else, and no telemetry.
