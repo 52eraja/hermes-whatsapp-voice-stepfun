@@ -1,7 +1,7 @@
 name: hermes-whatsapp-voice
 label: WhatsApp Voice Calls
 kind: standalone
-version: 0.1.5
+version: 0.1.6
 manifest_version: 2
 api_version: 1
 description: >-

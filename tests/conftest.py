@@ -73,6 +73,10 @@ class FakeCtx:
     def register_cli_command(self, name, **kwargs):
         self.cli[name] = kwargs
 
+    def register_skill(self, name, path):
+        assert path.exists(), path
+        self.skills = {**getattr(self, "skills", {}), name: path}
+
 
 class FakeSidecar:
     """Serves the sidecar API; `statuses` is the sequence a placed call walks through."""

@@ -54,6 +54,13 @@ device). No WhatsApp Business / Cloud API account is needed.
 
 ## Install
 
+**Let your agent do it.** Tell Hermes (or any coding agent on that machine) to follow
+[skills/setup/SKILL.md](skills/setup/SKILL.md). It's a step-by-step runbook written for agents,
+and it stops to ask you only for your number and to scan a QR code. After installing, Hermes can
+also load it as `hermes-whatsapp-voice:setup`.
+
+**Or by hand:**
+
 ```bash
 hermes plugins install ashwanthbalakrishnan5/hermes-whatsapp-voice --enable
 ```
@@ -68,13 +75,14 @@ hermes config set plugins.entries.hermes-whatsapp-voice.settings.owner_number +1
 
 ### 2. Link the sidecar to the bot's WhatsApp number (once)
 
-```bash
-hermes whatsapp-voice pair --phone +15550001111   # the BOT's number; prints a pair code
-hermes whatsapp-voice pair                        # or show a QR code instead
-```
+Easiest: open the Hermes dashboard, go to the **WhatsApp Voice** tab, click **Pair with
+WhatsApp**, and scan the QR from the **bot's** phone (WhatsApp > Linked devices > Link a device).
+From a terminal instead:
 
-On the **bot's** phone, open WhatsApp > Linked devices > Link a device > Link with phone number
-instead, and type the code.
+```bash
+hermes whatsapp-voice pair                        # shows a QR code
+hermes whatsapp-voice pair --phone +15550001111   # the BOT's number; prints a pair code
+```
 
 The first run also fetches the sidecar binary for your platform from this repo's GitHub release.
 You don't need Rust or any other toolchain. The download is checked against checksums pinned in
@@ -130,66 +138,13 @@ hermes cron create "0 9 * * 1-5" \
 The tool waits until the call is answered, declined or unanswered, and returns that status. On
 `no_answer`/`rejected`/`failed` it tells the agent to use another channel.
 
-## Settings
+## Configure
 
-Set these with `hermes config set plugins.entries.hermes-whatsapp-voice.settings.<key> <value>`:
-
-| key | default | |
-|---|---|---|
-| `owner_number` | (required) | Your number, international format |
-| `voice_model` | `gemini-3.8-live` | Gemini Live model |
-| `voice` | `Kore` | Gemini prebuilt voice |
-| `assistant_name` | `Hermes` | Fallback name when Hermes gives no persona briefing |
-| `voice_instructions` | (empty) | Your own extra rules for the voice: language, tone, call length |
-| `live_config` | `{}` | Advanced: any Gemini Live setup field, merged over the defaults (see below) |
-| `ring_timeout_seconds` | `45` | How long an outbound call rings |
-| `max_call_minutes` | `15` | Hard cap per call |
-| `answer_inbound` | `true` | Answer calls from `owner_number` |
-| `send_summary` | `true` | Message a summary after each call |
-| `listen` | `127.0.0.1:8796` | Sidecar API address (loopback) |
-| `hermes_api_url` | `http://127.0.0.1:8642` | Hermes API server |
-
-Restart the sidecar after changing settings.
-
-**Every Gemini Live option.** `live_config` takes any field of the Live API's setup message and
-merges it over the plugin's defaults. Objects merge key by key. `tools` is appended to the
-plugin's own tools rather than replacing them. For example, to change the voice and temperature,
-let the caller pause longer, and pin transcription languages:
-
-```yaml
-# ~/.hermes/config.yaml
-plugins:
-  entries:
-    hermes-whatsapp-voice:
-      settings:
-        live_config:
-          generationConfig:
-            temperature: 0.6
-            speechConfig: {voiceConfig: {prebuiltVoiceConfig: {voiceName: Puck}}}
-          realtimeInputConfig:
-            automaticActivityDetection: {silenceDurationMs: 900, endOfSpeechSensitivity: END_SENSITIVITY_LOW}
-          inputAudioTranscription: {languageCodes: [en-US]}
-```
-
-What each field does, and which ones a given model supports:
-[Live API reference (setup message)](https://ai.google.dev/api/live),
-[Live API capabilities guide](https://ai.google.dev/gemini-api/docs/live-guide),
-[session management](https://ai.google.dev/gemini-api/docs/live-session),
-[tool use](https://ai.google.dev/gemini-api/docs/live-tools),
-[best practices](https://ai.google.dev/gemini-api/docs/live-api/best-practices),
-[gemini-3.8-live model page](https://ai.google.dev/gemini-api/docs/models/gemini-3.8-live), and
-[voices](https://ai.google.dev/gemini-api/docs/speech-generation). There is no speaking-rate
-parameter. Ask for pace and tone in `voice_instructions` instead.
-
-**Personality.** The voice doesn't use a built-in persona. At startup and after each call, the
-sidecar asks your Hermes for a short briefing: its name, its personality, and what it knows about
-you. The voice then sounds like your Hermes, and changes to Hermes's memory carry over. Use
-`voice_instructions` for anything else, for example:
-
-```bash
-hermes config set plugins.entries.hermes-whatsapp-voice.settings.voice_instructions \
-  "Keep calls very short and direct. Never ask if there is anything else."
-```
+Everything is configurable from the **WhatsApp Voice** tab in the Hermes dashboard, the Desktop
+app's plugin settings, or `hermes config set`. That covers the voice, the model, your own
+instructions (language, tone, call length), and any Gemini Live option via `live_config`. The
+voice takes its name and personality from your own Hermes. Full reference:
+[docs/configuration.md](docs/configuration.md).
 
 ## What this plugin does that you should know about
 
@@ -212,6 +167,10 @@ hermes config set plugins.entries.hermes-whatsapp-voice.settings.voice_instructi
 - **Who it talks to.** It only answers calls from `owner_number` and only calls `owner_number`.
   Neither tool takes a destination parameter, so a prompt injection cannot make it call anyone else.
   Calls from other numbers are left alone, so the bot's other devices can still take them.
+- **Dashboard tab.** The **WhatsApp Voice** tab's backend runs inside the Hermes dashboard, behind
+  its login. It can save this plugin's settings (only keys declared in `plugin.yaml`, through
+  Hermes's own settings writer), start and stop a pairing session, place a test call to the owner,
+  and restart the sidecar service (`systemctl --user` or `launchctl`).
 - **Secrets** are read through Hermes (`get_secret`) and passed to the sidecar in its environment.
   The plugin never reads `.env` itself.
 

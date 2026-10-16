@@ -60,17 +60,30 @@ async fn open_store() -> Result<SqliteStore> {
 
 async fn pair(phone: Option<String>) -> Result<()> {
     let (done_tx, mut done_rx) = tokio::sync::mpsc::channel::<()>(1);
+    // The dashboard's Pair button shows this file, refreshed on every QR rotation.
+    let qr_file = Config::data_dir()?.join("pair-qr.svg");
+    let qr_path = qr_file.clone();
     let mut builder = Bot::builder()
         .with_backend(open_store().await?)
-        .on_qr_code(|code, timeout| async move {
-            match QrCode::new(code.as_bytes()) {
-                Ok(qr) => println!("\n{}", qr.render::<Dense1x2>().quiet_zone(true).build()),
-                Err(_) => println!("\n{code}"),
-            }
+        .on_qr_code(move |code, timeout| {
+            let qr_path = qr_path.clone();
+            async move {
+                match QrCode::new(code.as_bytes()) {
+                    Ok(qr) => {
+                        println!("\n{}", qr.render::<Dense1x2>().quiet_zone(true).build());
+                        let svg = qr.render::<qrcode::render::svg::Color>().min_dimensions(320, 320).build();
+                        let tmp = qr_path.with_extension("svg.tmp");
+                        if std::fs::write(&tmp, svg).and_then(|_| std::fs::rename(&tmp, &qr_path)).is_err() {
+                            log::warn!("could not write {}", qr_path.display());
+                        }
+                    }
+                    Err(_) => println!("\n{code}"),
+                }
             println!(
                 "On the bot's phone: WhatsApp > Linked devices > Link a device, then scan (valid {}s).",
-                timeout.as_secs()
-            );
+                    timeout.as_secs()
+                );
+            }
         })
         .on_pair_code(|code, timeout| async move {
             println!("\nPair code: {code}  (valid {}s)", timeout.as_secs());
@@ -100,6 +113,7 @@ async fn pair(phone: Option<String>) -> Result<()> {
     // Let post-login setup finish, then shut down cleanly: only shutdown() saves the new session.
     tokio::time::sleep(Duration::from_secs(5)).await;
     bot.shutdown().await;
+    let _ = std::fs::remove_file(&qr_file);
     println!("Linked. Start the sidecar with: hermes whatsapp-voice serve");
     Ok(())
 }

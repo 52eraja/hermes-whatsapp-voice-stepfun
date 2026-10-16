@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 
 def register(ctx):
     # Imported here so the package root has no import-time side effects.
@@ -32,6 +34,8 @@ def register(ctx):
         check_fn=available,
         emoji="📞",
     )
+    # The setup runbook, loadable by the owner's agent as hermes-whatsapp-voice:setup.
+    ctx.register_skill("setup", Path(__file__).parent / "skills" / "setup" / "SKILL.md")
     ctx.register_cli_command(
         name="whatsapp-voice",
         help="WhatsApp voice calls: install, pair and run the sidecar",

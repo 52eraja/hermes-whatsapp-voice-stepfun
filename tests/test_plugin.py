@@ -27,6 +27,7 @@ def test_registers_declared_tools_and_cli(plugin):
     plugin.register(ctx)
     assert set(ctx.tools) == {"whatsapp_call_owner", "whatsapp_call_status"}
     assert "whatsapp-voice" in ctx.cli
+    assert "setup" in ctx.skills
     # Unconfigured: tools stay hidden from the model.
     assert ctx.tools["whatsapp_call_owner"]["check_fn"]() is False
     # The call tool can only ever reach the owner.
