@@ -151,22 +151,22 @@ def test_settings_match_manifest_and_hermes_key_rules(plugin):
     plugin.sidecar_client.settings(FakeCtx())  # every key must be readable through Hermes
 
 
-def test_dashboard_settings_reject_unknown_keys_and_wrong_types(plugin, monkeypatch, tmp_path):
+def test_dashboard_settings_reject_unknown_keys_and_wrong_types(plugin, monkeypatch):
     import importlib.util
-    import sys
-    import types
+    import subprocess
 
-    saved = {}
-    state = types.ModuleType("hermes_cli.plugins_state")
-    state._plugin_relative_segments = lambda key: (key,)
-    state.save_plugin_setting = lambda plugin_id, segments, value: saved.update({segments: value})
-    monkeypatch.setitem(sys.modules, "hermes_cli", types.ModuleType("hermes_cli"))
-    monkeypatch.setitem(sys.modules, "hermes_cli.plugins_state", state)
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv[-2:])
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
     spec = importlib.util.spec_from_file_location(
         "hwv_dashboard_api", plugin.cli.PLUGIN_DIR / "dashboard" / "plugin_api.py"
     )
     api = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(api)
+    monkeypatch.setattr(api.subprocess, "run", fake_run)
 
     from fastapi import HTTPException
 
@@ -178,7 +178,13 @@ def test_dashboard_settings_reject_unknown_keys_and_wrong_types(plugin, monkeypa
     ):
         with pytest.raises(HTTPException):
             api.save_settings(bad)
-    assert saved == {}, "nothing is written when any value is rejected"
+    assert calls == [], "nothing is written when any value is rejected"
 
-    api.save_settings({"voice": "Puck", "ring_timeout_seconds": 30, "live_config": {"generationConfig": {}}})
-    assert saved == {("voice",): "Puck", ("ring_timeout_seconds",): 30, ("live_config",): {"generationConfig": {}}}
+    api.save_settings({"voice": "Puck", "ring_timeout_seconds": 30, "answer_inbound": False, "live_config": {"a": {}}})
+    prefix = "plugins.entries.hermes-whatsapp-voice.settings."
+    assert calls == [
+        [prefix + "voice", "Puck"],
+        [prefix + "ring_timeout_seconds", "30"],
+        [prefix + "answer_inbound", "false"],
+        [prefix + "live_config", '{"a": {}}'],
+    ]

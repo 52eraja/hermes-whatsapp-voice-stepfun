@@ -1,16 +1,18 @@
 """Dashboard backend for the WhatsApp Voice tab, mounted at /api/plugins/hermes-whatsapp-voice/.
 
-Runs inside the Hermes dashboard process, behind its auth. Settings are written with Hermes's own
-plugin-settings writer, so the dashboard, the Desktop app and `hermes config set` stay in sync.
+Runs inside the Hermes dashboard process, behind its auth. Settings are written through the public
+`hermes config set` CLI, so the dashboard, the Desktop app and the CLI stay in sync.
 """
 
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import platform
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import yaml
@@ -84,8 +86,6 @@ def get_settings():
 
 @router.post("/settings")
 def save_settings(body: dict):
-    from hermes_cli.plugins_state import _plugin_relative_segments, save_plugin_setting
-
     schema = _schema()
     types = {"str": str, "int": int, "bool": bool, "dict": dict}
     for key, value in body.items():
@@ -96,10 +96,34 @@ def save_settings(body: dict):
         if expected is int and isinstance(value, bool) or not isinstance(value, expected):
             raise HTTPException(400, f"{key} must be {spec.get('type', 'str')}")
     for key, value in body.items():
-        try:
-            save_plugin_setting(PLUGIN_ID, _plugin_relative_segments(key), value)
-        except PermissionError as e:
-            raise HTTPException(403, str(e)) from e
+        # The public `hermes config set` CLI (same interpreter, so PATH doesn't matter): it replaces
+        # the value, parses JSON objects, ints and booleans, and keeps other text as a string.
+        # shortcut: a str setting whose text looks like a number or boolean is stored as one; fine
+        # for these settings, revisit if a free-text setting needs literal "true"/"123".
+        text = (
+            json.dumps(value)
+            if isinstance(value, dict)
+            else str(value).lower()
+            if isinstance(value, bool)
+            else str(value)
+        )
+        done = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "hermes_cli.main",
+                "config",
+                "set",
+                f"plugins.entries.{PLUGIN_ID}.settings.{key}",
+                text,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        if done.returncode != 0:
+            raise HTTPException(500, f"saving {key} failed: {(done.stderr or done.stdout).strip()[-300:]}")
     return {"saved": sorted(body), "restart_needed": True}
 
 
