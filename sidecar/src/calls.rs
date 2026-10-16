@@ -690,7 +690,7 @@ fn system_instruction(name: &str, persona: &str, tools_note: &str, context: &str
         "{identity}\n\nYou are talking with the owner on a live WhatsApp voice call.\n\
          - This is a phone call: speak naturally and keep replies short. No lists, markdown, links or emoji.\n\
          - {tools_note}\n\
-         - End only when the owner says goodbye or confirms there is nothing else; then say a short goodbye and call end_call. Never hang up just because your own question got answered.\n\n\
+         - Keep calls short and direct; don't ask \"anything else?\". Once the purpose is done, say a brief goodbye, and call end_call after the owner says bye back.\n\n\
          {context}"
     )
 }
