@@ -120,17 +120,17 @@ impl EventHandler for CallObserver {
                 ..
             } => (call_creator, caller_pn),
             CallAction::PreAccept { call_id, .. } => {
-                return self.bridge.on_ring_signal(call_id, Signal::Ringing);
+                return self.bridge.ring_signals.send(call_id, Signal::Ringing);
             }
             CallAction::Accept { call_id, .. } => {
-                return self.bridge.on_ring_signal(call_id, Signal::Accepted);
+                return self.bridge.ring_signals.send(call_id, Signal::Accepted);
             }
             // `busy`/`enc` mean one device could not take the call; the others keep ringing.
             CallAction::Reject {
                 call_id,
                 reason: None,
                 ..
-            } => return self.bridge.on_ring_signal(call_id, Signal::Declined),
+            } => return self.bridge.ring_signals.send(call_id, Signal::Declined),
             _ => return,
         };
         if !self.bridge.cfg.answer_inbound {
@@ -155,12 +155,13 @@ async fn serve() -> Result<()> {
         .with_backend(open_store().await?)
         .on_qr_code(|_, _| async {
             log::error!("not linked to WhatsApp yet; run: hermes whatsapp-voice pair");
-            std::process::exit(2);
+            // Exit 0 so service managers (Restart=on-failure) don't retry until someone re-pairs.
+            std::process::exit(0);
         })
         .on_connected(|_| async { log::info!("connected to WhatsApp") })
         .on_logged_out(|info| async move {
             log::error!("logged out of WhatsApp ({info:?}); run: hermes whatsapp-voice pair");
-            std::process::exit(2);
+            std::process::exit(0);
         })
         .build()
         .await

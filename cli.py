@@ -132,7 +132,7 @@ def _service() -> None:
   <key>ProgramArguments</key>
   <array><string>{hermes}</string><string>whatsapp-voice</string><string>serve</string></array>
   <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
   <key>StandardOutPath</key><string>{log}</string>
   <key>StandardErrorPath</key><string>{log}</string>
 </dict>

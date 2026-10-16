@@ -181,14 +181,47 @@ pub enum Signal {
     Declined,
 }
 
+/// Peer signals for the outbound call that is ringing, keyed by WhatsApp call id. Collected only
+/// while a call rings. A signal can arrive before `start()` returns the id, so whichever side
+/// comes first creates the entry.
+#[derive(Default)]
+pub struct RingSignals(Mutex<Option<HashMap<String, watch::Sender<Signal>>>>);
+
+impl RingSignals {
+    fn start(&self) {
+        *self.0.lock().unwrap() = Some(HashMap::new());
+    }
+
+    fn stop(&self) {
+        *self.0.lock().unwrap() = None;
+    }
+
+    /// Called for the peer's preaccept/accept/reject stanzas.
+    pub fn send(&self, call_id: &str, signal: Signal) {
+        if let Some(map) = self.0.lock().unwrap().as_mut() {
+            map.entry(call_id.to_string())
+                .or_insert_with(|| watch::channel(Signal::Pending).0)
+                .send_replace(signal);
+        }
+    }
+
+    fn subscribe(&self, call_id: &str) -> Option<watch::Receiver<Signal>> {
+        let mut guard = self.0.lock().unwrap();
+        let map = guard.as_mut()?;
+        Some(
+            map.entry(call_id.to_string())
+                .or_insert_with(|| watch::channel(Signal::Pending).0)
+                .subscribe(),
+        )
+    }
+}
+
 pub struct Bridge {
     pub cfg: Config,
     pub client: Arc<Client>,
     pub calls: Calls,
+    pub ring_signals: RingSignals,
     hermes: Option<Hermes>,
-    /// `Some` only while an outbound call rings; keyed by WhatsApp call id. Signals can arrive
-    /// before `start()` returns the id, so whichever side comes first creates the entry.
-    ring_signals: Mutex<Option<HashMap<String, watch::Sender<Signal>>>>,
 }
 
 impl Bridge {
@@ -200,33 +233,14 @@ impl Bridge {
             client,
             calls: Calls::default(),
             hermes,
-            ring_signals: Mutex::new(None),
+            ring_signals: RingSignals::default(),
         }
-    }
-
-    /// Called for the peer's preaccept/accept/reject stanzas.
-    pub fn on_ring_signal(&self, call_id: &str, signal: Signal) {
-        if let Some(map) = self.ring_signals.lock().unwrap().as_mut() {
-            map.entry(call_id.to_string())
-                .or_insert_with(|| watch::channel(Signal::Pending).0)
-                .send_replace(signal);
-        }
-    }
-
-    fn ring_signal_rx(&self, call_id: &str) -> Option<watch::Receiver<Signal>> {
-        let mut guard = self.ring_signals.lock().unwrap();
-        let map = guard.as_mut()?;
-        Some(
-            map.entry(call_id.to_string())
-                .or_insert_with(|| watch::channel(Signal::Pending).0)
-                .subscribe(),
-        )
     }
 
     /// Rings until the owner answers (true) or the call is declined, ends, or times out (false,
     /// with the call record finished).
     async fn ring(&self, id: &str, handle: &CallHandle) -> bool {
-        let Some(mut rx) = self.ring_signal_rx(handle.call_id()) else {
+        let Some(mut rx) = self.ring_signals.subscribe(handle.call_id()) else {
             return false;
         };
         let ended = handle.wait_ended();
@@ -303,7 +317,7 @@ impl Bridge {
     pub async fn run_outbound(self: Arc<Self>, id: String, reason: String, details: String) {
         let (mic_tx, mic_rx) = async_channel::bounded::<Vec<i16>>(8);
         let (spk_tx, spk_rx) = async_channel::bounded::<Vec<i16>>(64);
-        *self.ring_signals.lock().unwrap() = Some(HashMap::new());
+        self.ring_signals.start();
         let started = self
             .client
             .voip()
@@ -325,7 +339,7 @@ impl Bridge {
                 false
             }
         };
-        *self.ring_signals.lock().unwrap() = None;
+        self.ring_signals.stop();
         let (Ok(handle), true) = (started, answered) else {
             return;
         };
@@ -687,6 +701,24 @@ mod tests {
         assert!(calls.active().is_none());
         assert!(calls.begin("inbound", "b").is_ok());
         assert_eq!(calls.recent(1)[0].direction, "inbound");
+    }
+
+    #[test]
+    fn ring_signals_reach_a_late_subscriber_only_while_ringing() {
+        let signals = RingSignals::default();
+        signals.send("C1", Signal::Accepted);
+        assert!(
+            signals.subscribe("C1").is_none(),
+            "nothing is collected before a call rings"
+        );
+
+        signals.start();
+        signals.send("C1", Signal::Accepted); // the accept can beat start() returning the id
+        assert_eq!(*signals.subscribe("C1").unwrap().borrow(), Signal::Accepted);
+        assert_eq!(*signals.subscribe("C2").unwrap().borrow(), Signal::Pending);
+
+        signals.stop();
+        assert!(signals.subscribe("C1").is_none());
     }
 
     #[test]
