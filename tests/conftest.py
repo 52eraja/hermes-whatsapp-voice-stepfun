@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import sys
 import threading
 import types
@@ -13,6 +14,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
+RESERVED_SETTING_ROOTS = {"model", "plugins", "security", "settings"}
 SECRETS = {"GEMINI_API_KEY": "gemini-test", "API_SERVER_KEY": "hermes-test"}
 
 
@@ -60,6 +62,9 @@ class FakeCtx:
         self.cli = {}
 
     def get_config(self, key, default=None):
+        # Mirrors Hermes's plugin-relative key rules (hermes_cli/plugins_state.py).
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", key) or key.lower() in RESERVED_SETTING_ROOTS:
+            raise ValueError(f"Hermes rejects plugin setting key {key!r}")
         return self.settings.get(key, default)
 
     def register_tool(self, name, toolset, schema, handler, **kwargs):

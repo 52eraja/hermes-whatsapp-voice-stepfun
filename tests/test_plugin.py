@@ -127,3 +127,13 @@ def test_download_rejects_binary_not_matching_pinned_checksum(plugin, monkeypatc
     with pytest.raises(SystemExit, match="Checksum mismatch"):
         plugin.cli._download_release(dest)
     assert not dest.exists()
+
+
+def test_settings_match_manifest_and_hermes_key_rules(plugin):
+    import yaml
+
+    manifest = yaml.safe_load((plugin.cli.PLUGIN_DIR / "plugin.yaml").read_text())
+    assert set(manifest["config_schema"]) == set(plugin.sidecar_client.SETTINGS)
+    for key, spec in manifest["config_schema"].items():
+        assert spec.get("default") == plugin.sidecar_client.SETTINGS[key] or key == "owner_number"
+    plugin.sidecar_client.settings(FakeCtx())  # every key must be readable through Hermes

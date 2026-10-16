@@ -134,7 +134,7 @@ Set these with `hermes config set plugins.entries.hermes-whatsapp-voice.settings
 | key | default | |
 |---|---|---|
 | `owner_number` | (required) | Your number, international format |
-| `model` | `gemini-3.8-live` | Gemini Live model |
+| `voice_model` | `gemini-3.8-live` | Gemini Live model |
 | `voice` | `Kore` | Gemini prebuilt voice |
 | `assistant_name` | `Hermes` | Name the voice agent uses |
 | `ring_timeout_seconds` | `45` | How long an outbound call rings |

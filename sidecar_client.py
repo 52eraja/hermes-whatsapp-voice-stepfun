@@ -15,7 +15,7 @@ BINARY_NAME = "hermes-wa-voice"
 # Settings forwarded to the sidecar, with the defaults from plugin.yaml.
 SETTINGS: dict[str, Any] = {
     "owner_number": "",
-    "model": "gemini-3.8-live",
+    "voice_model": "gemini-3.8-live",
     "voice": "Kore",
     "assistant_name": "Hermes",
     "listen": "127.0.0.1:8796",
@@ -65,7 +65,7 @@ def sidecar_env(ctx) -> dict[str, str]:
     s = settings(ctx)
     env = {
         "HWV_OWNER": str(s["owner_number"]),
-        "HWV_MODEL": str(s["model"]),
+        "HWV_MODEL": str(s["voice_model"]),
         "HWV_VOICE": str(s["voice"]),
         "HWV_ASSISTANT_NAME": str(s["assistant_name"]),
         "HWV_LISTEN": str(s["listen"]),
