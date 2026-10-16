@@ -216,11 +216,12 @@ impl RingSignals {
     }
 }
 
-/// When to hang up after the model calls end_call: wait for the owner's own goodbye, briefly.
+/// When to hang up after the model calls end_call: wait briefly for the owner's own goodbye.
+/// Once requested it is never cancelled: the model often answers "bye" with "bye" and then
+/// believes the call is over, so waiting for another end_call would leave the line open.
 #[derive(Default)]
 struct Hangup {
     at: Option<Instant>,
-    owner_replied: bool,
 }
 
 impl Hangup {
@@ -229,20 +230,11 @@ impl Hangup {
 
     fn requested(&mut self, now: Instant) {
         self.at = Some(now + Self::WAIT_FOR_BYE);
-        self.owner_replied = false;
     }
 
     fn owner_spoke(&mut self, now: Instant) {
         if self.at.is_some() {
             self.at = Some(now + Self::AFTER_BYE);
-            self.owner_replied = true;
-        }
-    }
-
-    /// The model answering the owner after its goodbye means the conversation went on.
-    fn model_spoke(&mut self) {
-        if self.owner_replied {
-            *self = Self::default();
         }
     }
 
@@ -619,10 +611,7 @@ impl Bridge {
                     }
                 }
                 ev = live.events.recv() => match ev {
-                    Some(LiveEvent::Audio(pcm)) => {
-                        hangup.model_spoke();
-                        playout.push(&down.process(&pcm));
-                    }
+                    Some(LiveEvent::Audio(pcm)) => playout.push(&down.process(&pcm)),
                     Some(LiveEvent::Interrupted) => playout.clear(),
                     Some(LiveEvent::InputTranscript(t)) => {
                         hangup.owner_spoke(Instant::now());
@@ -852,8 +841,8 @@ mod tests {
         assert!(!h.due(t0 + Duration::from_millis(3000)));
         assert!(h.due(t0 + Duration::from_millis(3200)));
 
-        h.model_spoke(); // the owner said more and the model answered: keep talking
-        assert!(!h.due(t0 + Duration::from_secs(60)));
+        h.owner_spoke(t0 + Duration::from_secs(4)); // more talk only delays it, never cancels
+        assert!(h.due(t0 + Duration::from_millis(5200)));
     }
 
     #[test]
