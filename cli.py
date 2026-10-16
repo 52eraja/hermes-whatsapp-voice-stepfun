@@ -50,9 +50,13 @@ def _download_release(dest: Path) -> None:
     tag = f"v{_version()}"
     asset = _release_asset()
     base = f"https://github.com/{REPO}/releases/download/{tag}"
+    # Pinned in this repo for the release matching plugin.yaml's version, so the code a reviewer
+    # read decides which binary is acceptable.
+    sums_file = PLUGIN_DIR / "sidecar" / "release-checksums.txt"
+    sums = dict(reversed(line.split()) for line in sums_file.read_text().splitlines() if line.strip())
+    if asset not in sums:
+        raise SystemExit(f"No pinned checksum for {asset}; use --from-source.")
     print(f"Downloading {asset} from the {tag} release of {REPO} ...")
-    with urllib.request.urlopen(f"{base}/SHA256SUMS", timeout=30) as resp:
-        sums = dict(reversed(line.split()) for line in resp.read().decode().splitlines() if line.strip())
     with urllib.request.urlopen(f"{base}/{asset}", timeout=120) as resp:
         blob = resp.read()
     digest = hashlib.sha256(blob).hexdigest()

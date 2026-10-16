@@ -74,8 +74,8 @@ On the **bot's** phone, open WhatsApp > Linked devices > Link a device > Link wi
 instead, and type the code.
 
 The first run also fetches the sidecar binary for your platform from this repo's GitHub release.
-You don't need Rust or any other toolchain. The download is checked against the release's
-`SHA256SUMS`. If the GitHub CLI is installed, its GitHub build attestation is checked too, which
+You don't need Rust or any other toolchain. The download is checked against checksums pinned in
+this repo (`sidecar/release-checksums.txt`). If the GitHub CLI is installed, its GitHub build attestation is checked too, which
 proves it was built from this repository by its release workflow. Prebuilt binaries cover linux
 amd64/arm64 and macOS arm64. To build it yourself instead (Rust 1.94+, cmake, a C compiler), run
 `hermes whatsapp-voice install --from-source`.
@@ -188,8 +188,9 @@ GEMINI_API_KEY=... cargo test -- --ignored   # live round trip against Gemini
 
 Layout: the repo root is the Hermes plugin (`plugin.yaml`, `__init__.py`, `tools.py`, `cli.py`,
 `sidecar_client.py`), and `sidecar/` is the Rust sidecar. Tagging `vX.Y.Z` builds attested release
-binaries (`.github/workflows/release.yml`). Keep `version` in `plugin.yaml` and `sidecar/Cargo.toml`
-in step with the tag.
+binaries (`.github/workflows/release.yml`). Then commit the release's `SHA256SUMS` as
+`sidecar/release-checksums.txt`. Keep `version` in `plugin.yaml` and `sidecar/Cargo.toml` in step
+with the tag.
 
 ## Credits
 

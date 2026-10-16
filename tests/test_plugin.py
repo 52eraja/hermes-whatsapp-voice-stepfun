@@ -108,3 +108,22 @@ def test_sidecar_env(plugin):
     assert env["HWV_TOKEN"] == plugin.sidecar_client.sidecar_env(ctx)["HWV_TOKEN"]
     token_file = plugin.sidecar_client.data_dir() / "sidecar.token"
     assert oct(token_file.stat().st_mode & 0o777) == "0o600"
+
+
+def test_download_rejects_binary_not_matching_pinned_checksum(plugin, monkeypatch, tmp_path):
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            return b"not the real binary"
+
+    monkeypatch.setattr(plugin.cli, "_release_asset", lambda: "hermes-wa-voice_linux_arm64")
+    monkeypatch.setattr(plugin.cli.urllib.request, "urlopen", lambda *a, **k: FakeResponse())
+    dest = tmp_path / "hermes-wa-voice"
+    with pytest.raises(SystemExit, match="Checksum mismatch"):
+        plugin.cli._download_release(dest)
+    assert not dest.exists()
