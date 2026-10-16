@@ -60,6 +60,13 @@ def settings(ctx) -> dict[str, Any]:
     return {key: ctx.get_config(key, default=default) for key, default in SETTINGS.items()}
 
 
+def gemini_key() -> str:
+    """The Gemini key Hermes's own Gemini provider uses, in the same order (GOOGLE_API_KEY first)."""
+    from agent.secret_scope import get_secret
+
+    return get_secret("GOOGLE_API_KEY") or get_secret("GEMINI_API_KEY") or ""
+
+
 def sidecar_env(ctx) -> dict[str, str]:
     """Environment for the sidecar. Secrets are resolved here, through Hermes."""
     from agent.secret_scope import get_secret
@@ -80,7 +87,7 @@ def sidecar_env(ctx) -> dict[str, str]:
         "HWV_DATA_DIR": str(data_dir()),
         "HWV_TOKEN": token(create=True),
         "HERMES_API_URL": str(s["hermes_api_url"]),
-        "GEMINI_API_KEY": get_secret("GEMINI_API_KEY") or "",
+        "GEMINI_API_KEY": gemini_key(),
         "HERMES_API_KEY": get_secret("API_SERVER_KEY") or "",
     }
     return env

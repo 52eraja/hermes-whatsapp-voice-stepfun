@@ -111,6 +111,16 @@ def test_sidecar_env(plugin):
     assert oct(token_file.stat().st_mode & 0o777) == "0o600"
 
 
+def test_gemini_key_follows_hermes_provider_order(plugin, monkeypatch):
+    import conftest
+
+    monkeypatch.setitem(conftest.SECRETS, "GOOGLE_API_KEY", "google-test")
+    assert plugin.sidecar_client.gemini_key() == "google-test"
+    monkeypatch.delitem(conftest.SECRETS, "GOOGLE_API_KEY")
+    monkeypatch.delitem(conftest.SECRETS, "GEMINI_API_KEY")
+    assert plugin.sidecar_client.gemini_key() == ""
+
+
 def test_download_rejects_binary_not_matching_pinned_checksum(plugin, monkeypatch, tmp_path):
     class FakeResponse:
         def __enter__(self):

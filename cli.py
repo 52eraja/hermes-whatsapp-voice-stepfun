@@ -12,7 +12,16 @@ import sys
 import urllib.request
 from pathlib import Path
 
-from .sidecar_client import BINARY_NAME, Client, SidecarError, binary_path, data_dir, settings, sidecar_env
+from .sidecar_client import (
+    BINARY_NAME,
+    Client,
+    SidecarError,
+    binary_path,
+    data_dir,
+    gemini_key,
+    settings,
+    sidecar_env,
+)
 
 REPO = "ashwanthbalakrishnan5/hermes-whatsapp-voice"
 PLUGIN_DIR = Path(__file__).resolve().parent
@@ -96,6 +105,12 @@ def _require_ready(ctx) -> Path:
     if not settings(ctx)["owner_number"]:
         raise SystemExit(
             "Set your number first: hermes config set plugins.entries.hermes-whatsapp-voice.settings.owner_number +15551234567"
+        )
+    if not gemini_key():
+        raise SystemExit(
+            "No Gemini API key found. This plugin reuses the key of Hermes's Gemini provider "
+            "(GOOGLE_API_KEY or GEMINI_API_KEY in ~/.hermes/.env). Add one with `hermes model` "
+            "(choose Gemini) or put it in ~/.hermes/.env."
         )
     exe = binary_path()
     if not exe.exists():

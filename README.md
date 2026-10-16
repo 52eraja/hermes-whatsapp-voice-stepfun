@@ -43,8 +43,11 @@ device). No WhatsApp Business / Cloud API account is needed.
 - Hermes `>= 0.21.5` on Linux or macOS.
 - A separate WhatsApp number for the bot: Hermes's WhatsApp `bot` mode, or any spare number. In
   `self-chat` mode the bot is your own number, and you can't call yourself.
-- A Gemini API key (`GEMINI_API_KEY`). The live models have a free tier, but Google may use free-tier
-  data. Paid use is roughly $0.005/min of audio in and $0.018/min out.
+- Gemini set up in Hermes with an API key. The plugin reuses the key of Hermes's Gemini provider
+  (`GOOGLE_API_KEY`, else `GEMINI_API_KEY`), so there is nothing extra to enter. Without one,
+  `hermes model` (choose Gemini) adds it. Google login (Cloud Code OAuth) does not work for the
+  Live API. The live models have a free tier, but Google may use free-tier data. Paid use is
+  roughly $0.005/min of audio in and $0.018/min out.
 - Optional, but needed for the voice agent to reach Hermes: the Hermes
   [API server](https://hermes-agent.nousresearch.com/docs/user-guide/features/api-server) enabled.
   It must have an `API_SERVER_KEY`.
@@ -198,8 +201,8 @@ hermes config set plugins.entries.hermes-whatsapp-voice.settings.voice_instructi
   linked device. Unlink it any time from the bot's phone (Linked devices).
 - **Network calls.**
   - WhatsApp servers (signaling and call media relays).
-  - `generativelanguage.googleapis.com`, which receives call audio during calls, using
-    `GEMINI_API_KEY`.
+  - `generativelanguage.googleapis.com`, which receives call audio during calls, using the Gemini
+    key Hermes already has.
   - Your local Hermes API server, for `ask_hermes`, the post-call summary, and a short persona
     briefing (Hermes's name, personality and what it knows about you) fetched at startup and after
     each call so the voice matches your Hermes. Uses `API_SERVER_KEY`.
