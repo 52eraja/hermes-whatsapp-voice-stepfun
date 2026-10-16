@@ -216,6 +216,41 @@ impl RingSignals {
     }
 }
 
+/// When to hang up after the model calls end_call: wait for the owner's own goodbye, briefly.
+#[derive(Default)]
+struct Hangup {
+    at: Option<Instant>,
+    owner_replied: bool,
+}
+
+impl Hangup {
+    const WAIT_FOR_BYE: Duration = Duration::from_secs(6);
+    const AFTER_BYE: Duration = Duration::from_millis(1200);
+
+    fn requested(&mut self, now: Instant) {
+        self.at = Some(now + Self::WAIT_FOR_BYE);
+        self.owner_replied = false;
+    }
+
+    fn owner_spoke(&mut self, now: Instant) {
+        if self.at.is_some() {
+            self.at = Some(now + Self::AFTER_BYE);
+            self.owner_replied = true;
+        }
+    }
+
+    /// The model answering the owner after its goodbye means the conversation went on.
+    fn model_spoke(&mut self) {
+        if self.owner_replied {
+            *self = Self::default();
+        }
+    }
+
+    fn due(&self, now: Instant) -> bool {
+        self.at.is_some_and(|t| now >= t)
+    }
+}
+
 pub struct Bridge {
     pub cfg: Config,
     pub client: Arc<Client>,
@@ -418,6 +453,10 @@ impl Bridge {
             .await
         {
             Ok(text) if !text.trim().is_empty() => {
+                log::info!(
+                    "persona briefing from Hermes loaded ({} chars)",
+                    text.trim().len()
+                );
                 *self.persona.lock().unwrap() = text.trim().to_string()
             }
             Ok(_) => {}
@@ -549,7 +588,7 @@ impl Bridge {
         let mut down = Downsampler::new();
         let (tool_tx, mut tool_rx) = mpsc::unbounded_channel::<(String, Value)>();
         let mut tool_tasks: HashMap<String, JoinHandle<()>> = HashMap::new();
-        let mut hangup_after: Option<Instant> = None;
+        let mut hangup = Hangup::default();
         let mut check = tokio::time::interval(Duration::from_millis(200));
         let max_duration = tokio::time::sleep(self.cfg.max_duration);
         let ended = handle.wait_ended();
@@ -575,15 +614,20 @@ impl Bridge {
                     live.send_tool_response(&tool_id, "ask_hermes", result, "WHEN_IDLE");
                 }
                 _ = check.tick() => {
-                    // end_call: hang up once the goodbye has finished playing.
-                    if hangup_after.is_some_and(|t| Instant::now() >= t) && playout.buffered() == 0 {
+                    if hangup.due(Instant::now()) && playout.buffered() == 0 {
                         break "assistant ended the call".to_string();
                     }
                 }
                 ev = live.events.recv() => match ev {
-                    Some(LiveEvent::Audio(pcm)) => playout.push(&down.process(&pcm)),
+                    Some(LiveEvent::Audio(pcm)) => {
+                        hangup.model_spoke();
+                        playout.push(&down.process(&pcm));
+                    }
                     Some(LiveEvent::Interrupted) => playout.clear(),
-                    Some(LiveEvent::InputTranscript(t)) => self.calls.update(id, |r| r.append("owner", &t)),
+                    Some(LiveEvent::InputTranscript(t)) => {
+                        hangup.owner_spoke(Instant::now());
+                        self.calls.update(id, |r| r.append("owner", &t));
+                    }
                     Some(LiveEvent::OutputTranscript(t)) => self.calls.update(id, |r| r.append("assistant", &t)),
                     Some(LiveEvent::ToolCall { id: tool_id, name, args }) => match name.as_str() {
                         "ask_hermes" => {
@@ -593,8 +637,7 @@ impl Bridge {
                         }
                         "end_call" => {
                             live.send_tool_response(&tool_id, &name, json!({"ok": true}), "SILENT");
-                            // Give the goodbye a moment to arrive before the queue is checked.
-                            hangup_after = Some(Instant::now() + Duration::from_millis(1500));
+                            hangup.requested(Instant::now());
                         }
                         _ => live.send_tool_response(&tool_id, &name, json!({"error": "unknown function"}), "WHEN_IDLE"),
                     },
@@ -784,6 +827,33 @@ mod tests {
         assert!(briefed.contains("Speak Spanish."));
         assert!(!briefed.contains("You are Hermes"));
         assert!(briefed.ends_with("ctx"));
+    }
+
+    #[test]
+    fn hangup_waits_briefly_for_the_owners_bye() {
+        let t0 = Instant::now();
+        let mut h = Hangup::default();
+        assert!(
+            !h.due(t0 + Duration::from_secs(60)),
+            "no hangup until end_call"
+        );
+        h.owner_spoke(t0); // speech before end_call changes nothing
+        assert!(!h.due(t0 + Duration::from_secs(60)));
+
+        h.requested(t0);
+        assert!(!h.due(t0 + Duration::from_secs(5)));
+        assert!(
+            h.due(t0 + Duration::from_secs(6)),
+            "silent owner: hang up after the wait"
+        );
+
+        h.requested(t0);
+        h.owner_spoke(t0 + Duration::from_secs(2)); // "bye!"
+        assert!(!h.due(t0 + Duration::from_millis(3000)));
+        assert!(h.due(t0 + Duration::from_millis(3200)));
+
+        h.model_spoke(); // the owner said more and the model answered: keep talking
+        assert!(!h.due(t0 + Duration::from_secs(60)));
     }
 
     #[test]
