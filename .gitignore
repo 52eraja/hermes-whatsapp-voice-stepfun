@@ -1,0 +1,16 @@
+# Private notes (server addresses, personal setup); never publish
+PLAN.md
+plan.md
+CLAUDE.md
+
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.venv/
+
+sidecar/target/
+*.db
+*.db-shm
+*.db-wal
+.DS_Store

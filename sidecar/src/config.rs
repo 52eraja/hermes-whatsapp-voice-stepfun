@@ -1,0 +1,112 @@
+//! Configuration from the environment. `hermes whatsapp-voice serve` fills it from the plugin's
+//! settings and Hermes secrets.
+
+use std::path::PathBuf;
+use std::time::Duration;
+
+use anyhow::{Context, Result, bail};
+
+#[derive(Clone, Debug)]
+pub struct Config {
+    /// Owner's phone number, digits only.
+    pub owner: String,
+    pub listen: String,
+    pub token: String,
+    pub gemini_api_key: String,
+    pub model: String,
+    pub voice: String,
+    pub assistant_name: String,
+    pub hermes_api_url: String,
+    /// Empty disables ask_hermes.
+    pub hermes_api_key: String,
+    pub ring_timeout: Duration,
+    pub max_duration: Duration,
+    pub answer_inbound: bool,
+    pub send_summary: bool,
+}
+
+fn var(name: &str, default: &str) -> String {
+    std::env::var(name)
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| default.to_string())
+}
+
+fn required(name: &str) -> Result<String> {
+    let v = var(name, "");
+    if v.is_empty() {
+        bail!("{name} is not set");
+    }
+    Ok(v)
+}
+
+/// Parses "45s", "15m", "1h" or plain seconds.
+pub fn parse_duration(s: &str) -> Result<Duration> {
+    let s = s.trim();
+    let (num, unit) = s.split_at(s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len()));
+    let n: u64 = num.parse().with_context(|| format!("bad duration {s:?}"))?;
+    let secs = match unit {
+        "" | "s" => n,
+        "m" => n * 60,
+        "h" => n * 3600,
+        _ => bail!("bad duration unit in {s:?}"),
+    };
+    Ok(Duration::from_secs(secs))
+}
+
+pub fn digits(number: &str) -> String {
+    number.chars().filter(char::is_ascii_digit).collect()
+}
+
+impl Config {
+    /// Settings needed by both `pair` and `serve`.
+    pub fn data_dir() -> Result<PathBuf> {
+        Ok(PathBuf::from(required("HWV_DATA_DIR")?))
+    }
+
+    pub fn from_env() -> Result<Self> {
+        let owner = digits(&required("HWV_OWNER")?);
+        if owner.len() < 7 {
+            bail!("HWV_OWNER must be a full international phone number");
+        }
+        Ok(Self {
+            owner,
+            listen: var("HWV_LISTEN", "127.0.0.1:8796"),
+            token: required("HWV_TOKEN")?,
+            gemini_api_key: required("GEMINI_API_KEY")?,
+            model: var("HWV_MODEL", "gemini-3.8-live"),
+            voice: var("HWV_VOICE", "Kore"),
+            assistant_name: var("HWV_ASSISTANT_NAME", "Hermes"),
+            hermes_api_url: var("HERMES_API_URL", "http://127.0.0.1:8642")
+                .trim_end_matches('/')
+                .to_string(),
+            hermes_api_key: var("HERMES_API_KEY", ""),
+            ring_timeout: parse_duration(&var("HWV_RING_TIMEOUT", "45s"))?,
+            max_duration: parse_duration(&var("HWV_MAX_DURATION", "15m"))?,
+            answer_inbound: var("HWV_ANSWER_INBOUND", "true") == "true",
+            send_summary: var("HWV_SEND_SUMMARY", "true") == "true",
+        })
+    }
+
+    pub fn store_path(data_dir: &std::path::Path) -> String {
+        data_dir.join("whatsapp.db").to_string_lossy().into_owned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn durations() {
+        assert_eq!(parse_duration("45s").unwrap(), Duration::from_secs(45));
+        assert_eq!(parse_duration("15m").unwrap(), Duration::from_secs(900));
+        assert_eq!(parse_duration("90").unwrap(), Duration::from_secs(90));
+        assert!(parse_duration("5x").is_err());
+    }
+
+    #[test]
+    fn owner_digits() {
+        assert_eq!(digits("+1 (555) 123-4567"), "15551234567");
+    }
+}

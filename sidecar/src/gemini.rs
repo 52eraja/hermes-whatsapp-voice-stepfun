@@ -1,0 +1,433 @@
+//! Minimal Gemini Live client over the raw `BidiGenerateContent` WebSocket.
+//!
+//! A `Live` hides connection turnover: on `goAway` (connections last about ten minutes) or a
+//! dropped socket it reconnects with the latest session-resumption handle, so the conversation
+//! carries on and callers only ever see one stream of events.
+
+use std::time::Duration;
+
+use anyhow::{Context, Result, anyhow, bail};
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as B64;
+use futures_util::{SinkExt, StreamExt};
+use serde_json::{Value, json};
+use tokio::net::TcpStream;
+use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
+use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
+
+use crate::audio::{i16_to_le_bytes, le_bytes_to_i16};
+
+const ENDPOINT: &str = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent";
+const MAX_RECONNECTS: u32 = 3;
+
+type Ws = WebSocketStream<MaybeTlsStream<TcpStream>>;
+
+#[derive(Clone, Debug)]
+pub struct Setup {
+    pub model: String,
+    pub voice: String,
+    pub system_instruction: String,
+    pub functions: Vec<Value>,
+}
+
+impl Setup {
+    fn message(&self, resume_handle: Option<&str>) -> Value {
+        let mut setup = json!({
+            "model": format!("models/{}", self.model),
+            "generationConfig": {
+                "responseModalities": ["AUDIO"],
+                "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": self.voice}}},
+            },
+            "systemInstruction": {"parts": [{"text": self.system_instruction}]},
+            "inputAudioTranscription": {},
+            "outputAudioTranscription": {},
+            "realtimeInputConfig": {
+                "automaticActivityDetection": {"silenceDurationMs": 600},
+                "activityHandling": "START_OF_ACTIVITY_INTERRUPTS",
+            },
+            "contextWindowCompression": {"slidingWindow": {}},
+            "sessionResumption": match resume_handle {
+                Some(h) => json!({"handle": h}),
+                None => json!({}),
+            },
+        });
+        if !self.functions.is_empty() {
+            setup["tools"] = json!([{"functionDeclarations": self.functions}]);
+        }
+        json!({"setup": setup})
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub enum LiveEvent {
+    /// Model speech, 24 kHz mono.
+    Audio(Vec<i16>),
+    /// The caller started talking over the model; drop queued speech.
+    Interrupted,
+    InputTranscript(String),
+    OutputTranscript(String),
+    ToolCall {
+        id: String,
+        name: String,
+        args: Value,
+    },
+    ToolCancelled(Vec<String>),
+    /// The session ended for good; carries the reason.
+    Closed(String),
+}
+
+/// What one server message means: events to surface, plus connection bookkeeping.
+#[derive(Debug, Default, PartialEq)]
+struct Parsed {
+    events: Vec<LiveEvent>,
+    resume_handle: Option<String>,
+    go_away: bool,
+}
+
+fn parse_server_message(msg: &Value) -> Parsed {
+    let mut p = Parsed::default();
+    if let Some(sc) = msg.get("serverContent") {
+        if sc["interrupted"].as_bool() == Some(true) {
+            p.events.push(LiveEvent::Interrupted);
+        }
+        for part in sc["modelTurn"]["parts"].as_array().into_iter().flatten() {
+            if let Some(data) = part["inlineData"]["data"].as_str()
+                && let Ok(bytes) = B64.decode(data)
+            {
+                p.events.push(LiveEvent::Audio(le_bytes_to_i16(&bytes)));
+            }
+        }
+        if let Some(t) = sc["inputTranscription"]["text"]
+            .as_str()
+            .filter(|t| !t.is_empty())
+        {
+            p.events.push(LiveEvent::InputTranscript(t.to_string()));
+        }
+        if let Some(t) = sc["outputTranscription"]["text"]
+            .as_str()
+            .filter(|t| !t.is_empty())
+        {
+            p.events.push(LiveEvent::OutputTranscript(t.to_string()));
+        }
+    }
+    for fc in msg["toolCall"]["functionCalls"]
+        .as_array()
+        .into_iter()
+        .flatten()
+    {
+        p.events.push(LiveEvent::ToolCall {
+            id: fc["id"].as_str().unwrap_or_default().to_string(),
+            name: fc["name"].as_str().unwrap_or_default().to_string(),
+            args: fc.get("args").cloned().unwrap_or(json!({})),
+        });
+    }
+    if let Some(ids) = msg["toolCallCancellation"]["ids"].as_array() {
+        let ids = ids
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect();
+        p.events.push(LiveEvent::ToolCancelled(ids));
+    }
+    let update = &msg["sessionResumptionUpdate"];
+    if update["resumable"].as_bool() == Some(true)
+        && let Some(h) = update["newHandle"].as_str()
+    {
+        p.resume_handle = Some(h.to_string());
+    }
+    p.go_away = msg.get("goAway").is_some();
+    p
+}
+
+pub struct Live {
+    outbox: mpsc::UnboundedSender<String>,
+    pub events: mpsc::UnboundedReceiver<LiveEvent>,
+    task: JoinHandle<()>,
+}
+
+impl Live {
+    pub async fn connect(api_key: &str, setup: Setup) -> Result<Self> {
+        let ws = open(api_key, &setup.message(None)).await?;
+        let (outbox, out_rx) = mpsc::unbounded_channel();
+        let (ev_tx, events) = mpsc::unbounded_channel();
+        let task = tokio::spawn(run(api_key.to_string(), setup, ws, out_rx, ev_tx));
+        Ok(Self {
+            outbox,
+            events,
+            task,
+        })
+    }
+
+    fn send(&self, msg: Value) {
+        let _ = self.outbox.send(msg.to_string());
+    }
+
+    /// 16 kHz mono caller audio.
+    pub fn send_audio(&self, pcm: &[i16]) {
+        self.send(json!({"realtimeInput": {"audio": {
+            "data": B64.encode(i16_to_le_bytes(pcm)),
+            "mimeType": "audio/pcm;rate=16000",
+        }}}));
+    }
+
+    pub fn send_text(&self, text: &str) {
+        self.send(json!({"realtimeInput": {"text": text}}));
+    }
+
+    /// `scheduling` applies to non-blocking functions: "INTERRUPT", "WHEN_IDLE" or "SILENT".
+    pub fn send_tool_response(&self, id: &str, name: &str, response: Value, scheduling: &str) {
+        self.send(json!({"toolResponse": {"functionResponses": [{
+            "id": id, "name": name, "response": response, "scheduling": scheduling,
+        }]}}));
+    }
+}
+
+impl Drop for Live {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+async fn open(api_key: &str, setup: &Value) -> Result<Ws> {
+    let mut req = ENDPOINT.into_client_request()?;
+    req.headers_mut().insert("x-goog-api-key", api_key.parse()?);
+    let (mut ws, _) = tokio::time::timeout(
+        Duration::from_secs(15),
+        tokio_tungstenite::connect_async(req),
+    )
+    .await
+    .context("timed out connecting to Gemini Live")?
+    .context("connecting to Gemini Live")?;
+    ws.send(Message::text(setup.to_string())).await?;
+    let ready = async {
+        while let Some(frame) = ws.next().await {
+            match frame? {
+                Message::Text(t) => {
+                    if serde_json::from_str::<Value>(&t)?
+                        .get("setupComplete")
+                        .is_some()
+                    {
+                        return Ok(());
+                    }
+                }
+                Message::Binary(b) => {
+                    if serde_json::from_slice::<Value>(&b)?
+                        .get("setupComplete")
+                        .is_some()
+                    {
+                        return Ok(());
+                    }
+                }
+                Message::Close(c) => bail!("Gemini Live closed during setup: {c:?}"),
+                _ => {}
+            }
+        }
+        Err(anyhow!("Gemini Live closed during setup"))
+    };
+    tokio::time::timeout(Duration::from_secs(15), ready)
+        .await
+        .context("timed out waiting for Gemini Live setup")??;
+    Ok(ws)
+}
+
+enum Turnover {
+    Reconnect(String),
+    Stop,
+}
+
+async fn pump(
+    ws: &mut Ws,
+    out_rx: &mut mpsc::UnboundedReceiver<String>,
+    ev_tx: &mpsc::UnboundedSender<LiveEvent>,
+    resume_handle: &mut Option<String>,
+) -> Turnover {
+    loop {
+        tokio::select! {
+            out = out_rx.recv() => match out {
+                Some(text) => {
+                    if let Err(e) = ws.send(Message::text(text)).await {
+                        return Turnover::Reconnect(format!("send failed: {e}"));
+                    }
+                }
+                None => {
+                    let _ = ws.close(None).await;
+                    return Turnover::Stop;
+                }
+            },
+            frame = ws.next() => {
+                let value = match frame {
+                    Some(Ok(Message::Text(t))) => serde_json::from_str::<Value>(&t),
+                    Some(Ok(Message::Binary(b))) => serde_json::from_slice::<Value>(&b),
+                    Some(Ok(Message::Close(c))) => return Turnover::Reconnect(format!("closed: {c:?}")),
+                    Some(Ok(_)) => continue,
+                    Some(Err(e)) => return Turnover::Reconnect(format!("socket error: {e}")),
+                    None => return Turnover::Reconnect("socket ended".into()),
+                };
+                let Ok(value) = value else { continue };
+                let parsed = parse_server_message(&value);
+                if parsed.resume_handle.is_some() {
+                    *resume_handle = parsed.resume_handle;
+                }
+                for ev in parsed.events {
+                    if ev_tx.send(ev).is_err() {
+                        return Turnover::Stop;
+                    }
+                }
+                if parsed.go_away {
+                    return Turnover::Reconnect("goAway".into());
+                }
+            }
+        }
+    }
+}
+
+async fn run(
+    api_key: String,
+    setup: Setup,
+    mut ws: Ws,
+    mut out_rx: mpsc::UnboundedReceiver<String>,
+    ev_tx: mpsc::UnboundedSender<LiveEvent>,
+) {
+    let mut resume_handle = None;
+    let mut failures = 0;
+    loop {
+        let why = match pump(&mut ws, &mut out_rx, &ev_tx, &mut resume_handle).await {
+            Turnover::Stop => return,
+            Turnover::Reconnect(why) => why,
+        };
+        let Some(handle) = resume_handle.clone() else {
+            let _ = ev_tx.send(LiveEvent::Closed(why));
+            return;
+        };
+        log::info!("gemini: {why}; resuming session");
+        loop {
+            match open(&api_key, &setup.message(Some(&handle))).await {
+                Ok(next) => {
+                    ws = next;
+                    failures = 0;
+                    break;
+                }
+                Err(e) if failures + 1 < MAX_RECONNECTS => {
+                    failures += 1;
+                    log::warn!("gemini: resume attempt {failures} failed: {e:#}");
+                    tokio::time::sleep(Duration::from_millis(500 * u64::from(failures))).await;
+                }
+                Err(e) => {
+                    let _ = ev_tx.send(LiveEvent::Closed(format!("could not resume: {e:#}")));
+                    return;
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_audio_transcripts_and_interrupt() {
+        let pcm = B64.encode(i16_to_le_bytes(&[1, -2, 3]));
+        let msg = json!({"serverContent": {
+            "interrupted": true,
+            "modelTurn": {"parts": [{"inlineData": {"mimeType": "audio/pcm;rate=24000", "data": pcm}}]},
+            "inputTranscription": {"text": "hi"},
+            "outputTranscription": {"text": "hello"},
+        }});
+        assert_eq!(
+            parse_server_message(&msg).events,
+            vec![
+                LiveEvent::Interrupted,
+                LiveEvent::Audio(vec![1, -2, 3]),
+                LiveEvent::InputTranscript("hi".into()),
+                LiveEvent::OutputTranscript("hello".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn parses_tool_calls_resumption_and_go_away() {
+        let msg = json!({
+            "toolCall": {"functionCalls": [{"id": "c1", "name": "ask_hermes", "args": {"request": "x"}}]},
+            "toolCallCancellation": {"ids": ["c0"]},
+            "sessionResumptionUpdate": {"newHandle": "h2", "resumable": true},
+            "goAway": {"timeLeft": "5s"},
+        });
+        let p = parse_server_message(&msg);
+        assert_eq!(
+            p.events,
+            vec![
+                LiveEvent::ToolCall {
+                    id: "c1".into(),
+                    name: "ask_hermes".into(),
+                    args: json!({"request": "x"})
+                },
+                LiveEvent::ToolCancelled(vec!["c0".into()]),
+            ]
+        );
+        assert_eq!(p.resume_handle.as_deref(), Some("h2"));
+        assert!(p.go_away);
+    }
+
+    #[test]
+    fn ignores_non_resumable_handles() {
+        let msg = json!({"sessionResumptionUpdate": {"newHandle": "h", "resumable": false}});
+        assert_eq!(parse_server_message(&msg).resume_handle, None);
+    }
+
+    #[test]
+    fn setup_message_shape() {
+        let setup = Setup {
+            model: "gemini-3.8-live".into(),
+            voice: "Kore".into(),
+            system_instruction: "be brief".into(),
+            functions: vec![json!({"name": "end_call"})],
+        };
+        let m = setup.message(Some("h1"));
+        assert_eq!(m["setup"]["model"], "models/gemini-3.8-live");
+        assert_eq!(m["setup"]["sessionResumption"]["handle"], "h1");
+        assert_eq!(
+            m["setup"]["tools"][0]["functionDeclarations"][0]["name"],
+            "end_call"
+        );
+        assert_eq!(
+            m["setup"]["generationConfig"]["responseModalities"][0],
+            "AUDIO"
+        );
+    }
+
+    /// Live check against the real API: `GEMINI_API_KEY=... cargo test -- --ignored`.
+    #[tokio::test]
+    #[ignore]
+    async fn live_round_trip() {
+        let key = std::env::var("GEMINI_API_KEY").expect("GEMINI_API_KEY");
+        let setup = Setup {
+            model: std::env::var("HWV_MODEL").unwrap_or_else(|_| "gemini-3.8-live".into()),
+            voice: "Kore".into(),
+            system_instruction: "Answer in one short sentence.".into(),
+            functions: vec![
+                json!({"name": "end_call", "description": "Hang up.", "behavior": "NON_BLOCKING"}),
+            ],
+        };
+        let mut live = Live::connect(&key, setup).await.expect("connect");
+        live.send_text("Say hello.");
+        let (mut audio, mut transcript) = (0usize, String::new());
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+        while audio < 24_000 || transcript.is_empty() {
+            match tokio::time::timeout_at(deadline, live.events.recv()).await {
+                Ok(Some(LiveEvent::Audio(pcm))) => audio += pcm.len(),
+                Ok(Some(LiveEvent::OutputTranscript(t))) => transcript.push_str(&t),
+                Ok(Some(LiveEvent::Closed(why))) => panic!("closed: {why}"),
+                Ok(Some(_)) => {}
+                Ok(None) | Err(_) => break,
+            }
+        }
+        println!("audio samples: {audio}, transcript: {transcript:?}");
+        assert!(
+            audio >= 24_000,
+            "expected at least 1s of speech, got {audio} samples"
+        );
+    }
+}

@@ -1,0 +1,5 @@
+line-length = 120
+
+[lint.per-file-ignores]
+# Hermes loads the plugin directory (named after the plugin, with hyphens) as a package.
+"__init__.py" = ["N999"]

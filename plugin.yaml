@@ -1,0 +1,70 @@
+name: hermes-whatsapp-voice
+label: WhatsApp Voice Calls
+kind: standalone
+version: 0.1.0
+manifest_version: 2
+api_version: 1
+description: >-
+  Live voice calls with Hermes over WhatsApp. Call your bot's number and talk to
+  Hermes, or let Hermes call you for things that matter. Uses a linked-device
+  sidecar and Gemini Live speech-to-speech.
+author: Ashwanth Balakrishnan
+license: MIT
+homepage: https://github.com/ashwanthbalakrishnan5/hermes-whatsapp-voice
+tags: [whatsapp, voice, calls, gemini-live]
+platforms: [linux, macos]
+requires_hermes: ">=0.21.5"
+provides_tools:
+  - whatsapp_call_owner
+  - whatsapp_call_status
+requires_env:
+  - name: GEMINI_API_KEY
+    description: "Gemini API key used for the live speech-to-speech model"
+    url: "https://aistudio.google.com/apikey"
+    secret: true
+optional_env:
+  - name: API_SERVER_KEY
+    description: "Hermes API server key; lets the voice agent hand real work to Hermes during a call"
+    secret: true
+config_schema:
+  owner_number:
+    type: str
+    default: ""
+    required: true
+    description: "Your WhatsApp number in international format (e.g. +15551234567). The only number that is called and the only caller that is answered."
+  model:
+    type: str
+    default: "gemini-3.8-live"
+    description: "Gemini Live model"
+  voice:
+    type: str
+    default: "Kore"
+    description: "Gemini prebuilt voice name"
+  assistant_name:
+    type: str
+    default: "Hermes"
+    description: "Name the voice agent introduces itself with"
+  listen:
+    type: str
+    default: "127.0.0.1:8796"
+    description: "Loopback address the sidecar's HTTP API binds to"
+  hermes_api_url:
+    type: str
+    default: "http://127.0.0.1:8642"
+    description: "Hermes API server base URL used for ask_hermes during calls"
+  ring_timeout_seconds:
+    type: int
+    default: 45
+    description: "How long an outbound call rings before it counts as unanswered"
+  max_call_minutes:
+    type: int
+    default: 15
+    description: "Hard limit on a single call's length"
+  answer_inbound:
+    type: bool
+    default: true
+    description: "Answer calls from owner_number. Calls from anyone else are never answered."
+  send_summary:
+    type: bool
+    default: true
+    description: "Send a WhatsApp message with a call summary after each call"

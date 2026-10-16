@@ -1,0 +1,636 @@
+//! Call records and the conversation bridge: WhatsApp call audio <-> Gemini Live, with Hermes as
+//! the voice agent's tool.
+
+use std::collections::{HashMap, VecDeque};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use anyhow::{Result, bail};
+use serde::Serialize;
+use serde_json::{Value, json};
+use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
+use tokio::time::MissedTickBehavior;
+use whatsapp_rust::async_channel;
+use whatsapp_rust::prelude::*;
+use whatsapp_rust::voip::session::CallPhase;
+use whatsapp_rust::voip::{CallHandle, CallTermination};
+use whatsapp_rust::wacore::types::call::IncomingCall;
+
+use crate::audio::{Downsampler, Playout};
+use crate::config::Config;
+use crate::gemini::{Live, LiveEvent, Setup};
+use crate::hermes::Hermes;
+
+const KEEP_RECORDS: usize = 50;
+const FRAME_INTERVAL: Duration = Duration::from_millis(60);
+const HERMES_TIMEOUT: Duration = Duration::from_secs(180);
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Status {
+    Dialing,
+    Ringing,
+    InProgress,
+    Completed,
+    NoAnswer,
+    Rejected,
+    Failed,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct Turn {
+    pub role: &'static str,
+    pub text: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct CallRecord {
+    pub id: String,
+    pub direction: &'static str,
+    pub status: Status,
+    pub reason: String,
+    pub started_at: u64,
+    pub answered_at: Option<u64>,
+    pub ended_at: Option<u64>,
+    pub end_reason: Option<String>,
+    pub transcript: Vec<Turn>,
+    pub summary: Option<String>,
+}
+
+fn now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+fn new_id() -> String {
+    format!("{:012x}", rand::random::<u64>() & 0xffff_ffff_ffff)
+}
+
+impl CallRecord {
+    fn new(direction: &'static str, reason: &str) -> Self {
+        Self {
+            id: new_id(),
+            direction,
+            status: Status::Dialing,
+            reason: reason.to_string(),
+            started_at: now(),
+            answered_at: None,
+            ended_at: None,
+            end_reason: None,
+            transcript: Vec::new(),
+            summary: None,
+        }
+    }
+
+    /// Transcription arrives in fragments; consecutive fragments from one speaker form a turn.
+    fn append(&mut self, role: &'static str, text: &str) {
+        match self.transcript.last_mut() {
+            Some(last) if last.role == role => last.text.push_str(text),
+            _ => self.transcript.push(Turn {
+                role,
+                text: text.to_string(),
+            }),
+        }
+    }
+
+    pub fn transcript_text(&self) -> String {
+        self.transcript
+            .iter()
+            .map(|t| format!("{}: {}", t.role, t.text.trim()))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+}
+
+/// Recent calls, newest last, and the single active call slot.
+#[derive(Default)]
+pub struct Calls {
+    records: Mutex<VecDeque<CallRecord>>,
+    active: Mutex<Option<String>>,
+}
+
+impl Calls {
+    /// Claims the active slot for a new call; fails when one is already running.
+    fn begin(&self, direction: &'static str, reason: &str) -> Result<CallRecord> {
+        let mut active = self.active.lock().unwrap();
+        if let Some(id) = active.as_ref() {
+            bail!("a call is already in progress ({id})");
+        }
+        let record = CallRecord::new(direction, reason);
+        *active = Some(record.id.clone());
+        let mut records = self.records.lock().unwrap();
+        records.push_back(record.clone());
+        if records.len() > KEEP_RECORDS {
+            records.pop_front();
+        }
+        Ok(record)
+    }
+
+    fn finish(&self, id: &str, status: Status, end_reason: impl Into<String>) {
+        self.update(id, |r| {
+            r.status = status;
+            r.ended_at = Some(now());
+            r.end_reason = Some(end_reason.into());
+        });
+        let mut active = self.active.lock().unwrap();
+        if active.as_deref() == Some(id) {
+            *active = None;
+        }
+    }
+
+    fn update(&self, id: &str, f: impl FnOnce(&mut CallRecord)) {
+        if let Some(r) = self.records.lock().unwrap().iter_mut().find(|r| r.id == id) {
+            f(r);
+        }
+    }
+
+    pub fn get(&self, id: &str) -> Option<CallRecord> {
+        self.records
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|r| r.id == id)
+            .cloned()
+    }
+
+    pub fn recent(&self, limit: usize) -> Vec<CallRecord> {
+        self.records
+            .lock()
+            .unwrap()
+            .iter()
+            .rev()
+            .take(limit)
+            .cloned()
+            .collect()
+    }
+
+    pub fn active(&self) -> Option<String> {
+        self.active.lock().unwrap().clone()
+    }
+}
+
+pub struct Bridge {
+    pub cfg: Config,
+    pub client: Arc<Client>,
+    pub calls: Calls,
+    hermes: Option<Hermes>,
+}
+
+impl Bridge {
+    pub fn new(cfg: Config, client: Arc<Client>) -> Self {
+        let hermes = (!cfg.hermes_api_key.is_empty())
+            .then(|| Hermes::new(&cfg.hermes_api_url, &cfg.hermes_api_key));
+        Self {
+            cfg,
+            client,
+            calls: Calls::default(),
+            hermes,
+        }
+    }
+
+    fn owner_jid(&self) -> Jid {
+        Jid::pn(self.cfg.owner.as_str())
+    }
+
+    /// Whether an incoming offer comes from the owner's number.
+    pub async fn is_owner(
+        &self,
+        call: &IncomingCall,
+        creator: &Jid,
+        caller_pn: Option<&Jid>,
+    ) -> bool {
+        for jid in caller_pn.into_iter().chain([creator, &call.from]) {
+            if jid.is_pn() {
+                return jid.user == self.cfg.owner;
+            }
+        }
+        for jid in [creator, &call.from] {
+            if jid.is_lid()
+                && let Ok(Some(entry)) = self.client.get_lid_pn_entry(jid).await
+            {
+                return *entry.phone_number == *self.cfg.owner;
+            }
+        }
+        false
+    }
+
+    /// Validates and registers an outbound call; the caller spawns `run_outbound`.
+    pub fn begin_outbound(&self, reason: &str) -> Result<CallRecord> {
+        self.calls.begin("outbound", reason)
+    }
+
+    pub async fn run_outbound(self: Arc<Self>, id: String, reason: String, details: String) {
+        let (mic_tx, mic_rx) = async_channel::bounded::<Vec<i16>>(8);
+        let (spk_tx, spk_rx) = async_channel::bounded::<Vec<i16>>(64);
+        let handle = match self
+            .client
+            .voip()
+            .call(&self.owner_jid())
+            .audio(mic_rx, spk_tx)
+            .start()
+            .await
+        {
+            Ok(h) => h,
+            Err(e) => {
+                return self.calls.finish(
+                    &id,
+                    Status::Failed,
+                    format!("could not place call: {e}"),
+                );
+            }
+        };
+        log::info!(
+            "call {id}: dialing owner (whatsapp call {})",
+            handle.call_id()
+        );
+
+        // Ring until answered, declined, or timed out.
+        let deadline = Instant::now() + self.cfg.ring_timeout;
+        loop {
+            match handle.phase() {
+                Some(CallPhase::Connecting | CallPhase::Active) => break,
+                Some(CallPhase::Ringing) => self.calls.update(&id, |r| r.status = Status::Ringing),
+                Some(CallPhase::Ended) | None => {
+                    return self.calls.finish(
+                        &id,
+                        Status::Rejected,
+                        "declined or ended before answer",
+                    );
+                }
+                _ => {}
+            }
+            if Instant::now() >= deadline {
+                terminate(&handle).await;
+                return self.calls.finish(&id, Status::NoAnswer, "no answer");
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+
+        let opening = format!(
+            "(The owner just answered the call you placed. Greet them and get to the point: {reason})"
+        );
+        let mut context = format!("You placed this call. Reason: {reason}");
+        if !details.is_empty() {
+            context.push_str(&format!("\nDetails: {details}"));
+        }
+        self.converse(&id, handle, mic_tx, spk_rx, &opening, &context)
+            .await;
+    }
+
+    pub async fn run_inbound(self: Arc<Self>, call: IncomingCall) {
+        let record = match self.calls.begin("inbound", "owner called") {
+            Ok(r) => r,
+            Err(e) => return log::info!("ignoring owner call: {e}"),
+        };
+        let (mic_tx, mic_rx) = async_channel::bounded::<Vec<i16>>(8);
+        let (spk_tx, spk_rx) = async_channel::bounded::<Vec<i16>>(64);
+        let handle = match self
+            .client
+            .voip()
+            .accept(&call)
+            .audio(mic_rx, spk_tx)
+            .start()
+            .await
+        {
+            Ok(h) => h,
+            Err(e) => {
+                return self.calls.finish(
+                    &record.id,
+                    Status::Failed,
+                    format!("could not answer: {e}"),
+                );
+            }
+        };
+        log::info!(
+            "call {}: answered owner (whatsapp call {})",
+            record.id,
+            handle.call_id()
+        );
+        let opening = "(The owner is calling you and is now connected. Greet them briefly and ask what they need.)";
+        self.converse(
+            &record.id,
+            handle,
+            mic_tx,
+            spk_rx,
+            opening,
+            "The owner called you.",
+        )
+        .await;
+    }
+
+    fn setup(&self, context: &str) -> Setup {
+        let name = &self.cfg.assistant_name;
+        let tools_note = if self.hermes.is_some() {
+            "You are the voice of Hermes, the owner's agent, which has their memory, files, calendar, \
+             reminders, messages and tools. For any action, or any fact you do not already know, call \
+             ask_hermes with a clear, self-contained request. Say a few words first, like \"one moment, \
+             let me check\"; the answer arrives a little later and you will be told when it does. Never \
+             make up results."
+        } else {
+            "You cannot take actions or look things up during this call; say so if asked."
+        };
+        let system_instruction = format!(
+            "You are {name}, the owner's personal assistant, talking with them on a live WhatsApp \
+             voice call.\n\
+             - This is a phone call: speak naturally and keep replies short. No lists, markdown, \
+             links or emoji.\n\
+             - {tools_note}\n\
+             - When the conversation is clearly finished, say a short goodbye and then call end_call.\n\n\
+             {context}"
+        );
+        let mut functions = vec![json!({
+            "name": "end_call",
+            "description": "Hang up the call. Call it only after you have said goodbye.",
+            "behavior": "NON_BLOCKING",
+        })];
+        if self.hermes.is_some() {
+            functions.push(json!({
+                "name": "ask_hermes",
+                "description": "Hand a request to Hermes, the owner's full agent with memory and tools \
+                    (calendar, reminders, messages, notes, web, home). Use it for any action or any \
+                    information you do not have.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"request": {
+                        "type": "string",
+                        "description": "A complete, self-contained instruction or question for Hermes.",
+                    }},
+                    "required": ["request"],
+                },
+                "behavior": "NON_BLOCKING",
+            }));
+        }
+        Setup {
+            model: self.cfg.model.clone(),
+            voice: self.cfg.voice.clone(),
+            system_instruction,
+            functions,
+        }
+    }
+
+    fn spawn_ask_hermes(
+        &self,
+        id: &str,
+        call_id: &str,
+        args: &Value,
+        done: mpsc::UnboundedSender<(String, Value)>,
+    ) -> JoinHandle<()> {
+        let hermes = self.hermes.clone();
+        let request = args["request"].as_str().unwrap_or_default().to_string();
+        let (tool_id, session) = (id.to_string(), format!("whatsapp-voice-{call_id}"));
+        tokio::spawn(async move {
+            let result = match hermes {
+                None => json!({"error": "Hermes is not connected"}),
+                Some(h) => {
+                    let instructions = "This request comes from the owner, live on a WhatsApp voice call \
+                        with your voice agent. Do what is asked. Reply in one to three short, plain \
+                        sentences that can be read aloud: no markdown, lists, links or emoji.";
+                    match h
+                        .run(&request, instructions, &session, HERMES_TIMEOUT)
+                        .await
+                    {
+                        Ok(answer) => json!({"result": answer}),
+                        Err(e) => json!({"error": format!("{e:#}")}),
+                    }
+                }
+            };
+            let _ = done.send((tool_id, result));
+        })
+    }
+
+    async fn converse(
+        &self,
+        id: &str,
+        handle: CallHandle,
+        mic_tx: async_channel::Sender<Vec<i16>>,
+        spk_rx: async_channel::Receiver<Vec<i16>>,
+        opening: &str,
+        context: &str,
+    ) {
+        self.calls.update(id, |r| {
+            r.status = Status::InProgress;
+            r.answered_at = Some(now());
+        });
+        let mut live = match Live::connect(&self.cfg.gemini_api_key, self.setup(context)).await {
+            Ok(l) => l,
+            Err(e) => {
+                log::error!("call {id}: voice model unavailable: {e:#}");
+                terminate(&handle).await;
+                return self.calls.finish(
+                    id,
+                    Status::Failed,
+                    format!("voice model unavailable: {e:#}"),
+                );
+            }
+        };
+        live.send_text(opening);
+
+        // Model speech goes out on a fixed 60 ms clock; the library does not pace for us.
+        let playout = Arc::new(Playout::default());
+        let pacer = tokio::spawn({
+            let playout = playout.clone();
+            async move {
+                let mut tick = tokio::time::interval(FRAME_INTERVAL);
+                tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
+                loop {
+                    tick.tick().await;
+                    if mic_tx.send(playout.next_frame()).await.is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+
+        let mut down = Downsampler::new();
+        let (tool_tx, mut tool_rx) = mpsc::unbounded_channel::<(String, Value)>();
+        let mut tool_tasks: HashMap<String, JoinHandle<()>> = HashMap::new();
+        let mut hangup_after: Option<Instant> = None;
+        let mut check = tokio::time::interval(Duration::from_millis(200));
+        let max_duration = tokio::time::sleep(self.cfg.max_duration);
+        let ended = handle.wait_ended();
+        tokio::pin!(max_duration, ended);
+
+        let mut peer_ended = false;
+        let end_reason = loop {
+            tokio::select! {
+                _ = &mut ended => {
+                    peer_ended = true;
+                    break "call ended".to_string();
+                }
+                _ = &mut max_duration => break "maximum call length reached".to_string(),
+                frame = spk_rx.recv() => match frame {
+                    Ok(f) => live.send_audio(&f),
+                    Err(_) => {
+                        peer_ended = true;
+                        break "call audio closed".to_string();
+                    }
+                },
+                Some((tool_id, result)) = tool_rx.recv() => {
+                    tool_tasks.remove(&tool_id);
+                    live.send_tool_response(&tool_id, "ask_hermes", result, "WHEN_IDLE");
+                }
+                _ = check.tick() => {
+                    // end_call: hang up once the goodbye has finished playing.
+                    if hangup_after.is_some_and(|t| Instant::now() >= t) && playout.buffered() == 0 {
+                        break "assistant ended the call".to_string();
+                    }
+                }
+                ev = live.events.recv() => match ev {
+                    Some(LiveEvent::Audio(pcm)) => playout.push(&down.process(&pcm)),
+                    Some(LiveEvent::Interrupted) => playout.clear(),
+                    Some(LiveEvent::InputTranscript(t)) => self.calls.update(id, |r| r.append("owner", &t)),
+                    Some(LiveEvent::OutputTranscript(t)) => self.calls.update(id, |r| r.append("assistant", &t)),
+                    Some(LiveEvent::ToolCall { id: tool_id, name, args }) => match name.as_str() {
+                        "ask_hermes" => {
+                            log::info!("call {id}: ask_hermes {}", args["request"]);
+                            let task = self.spawn_ask_hermes(&tool_id, id, &args, tool_tx.clone());
+                            tool_tasks.insert(tool_id, task);
+                        }
+                        "end_call" => {
+                            live.send_tool_response(&tool_id, &name, json!({"ok": true}), "SILENT");
+                            // Give the goodbye a moment to arrive before the queue is checked.
+                            hangup_after = Some(Instant::now() + Duration::from_millis(1500));
+                        }
+                        _ => live.send_tool_response(&tool_id, &name, json!({"error": "unknown function"}), "WHEN_IDLE"),
+                    },
+                    Some(LiveEvent::ToolCancelled(ids)) => {
+                        for tool_id in ids {
+                            if let Some(task) = tool_tasks.remove(&tool_id) {
+                                task.abort();
+                            }
+                        }
+                    }
+                    Some(LiveEvent::Closed(why)) => break format!("voice model disconnected: {why}"),
+                    None => break "voice model stopped".to_string(),
+                },
+            }
+        };
+
+        pacer.abort();
+        tool_tasks.values().for_each(JoinHandle::abort);
+        drop(live);
+        if !peer_ended {
+            terminate(&handle).await;
+        }
+        log::info!("call {id}: {end_reason}");
+        self.calls.finish(id, Status::Completed, end_reason);
+        self.send_summary(id).await;
+    }
+
+    /// After a call: let Hermes digest the transcript, then message the owner a summary.
+    async fn send_summary(&self, id: &str) {
+        let Some(record) = self.calls.get(id) else {
+            return;
+        };
+        if record.transcript.is_empty() {
+            return;
+        }
+        let transcript = record.transcript_text();
+        let summary = match &self.hermes {
+            Some(h) => {
+                let input = format!(
+                    "A WhatsApp voice call between the owner and your voice agent just ended. \
+                     Transcript:\n\n{transcript}\n\nNote anything worth remembering. Do not redo \
+                     actions that were already done during the call. Reply with only a two or three \
+                     sentence summary of the call for the owner."
+                );
+                match h
+                    .run(
+                        &input,
+                        "Reply in plain text only.",
+                        &format!("whatsapp-voice-{id}"),
+                        HERMES_TIMEOUT,
+                    )
+                    .await
+                {
+                    Ok(s) if !s.trim().is_empty() => s,
+                    Ok(_) => transcript.clone(),
+                    Err(e) => {
+                        log::warn!("call {id}: summary run failed: {e:#}");
+                        transcript.clone()
+                    }
+                }
+            }
+            None => transcript.clone(),
+        };
+        self.calls.update(id, |r| r.summary = Some(summary.clone()));
+        if !self.cfg.send_summary {
+            return;
+        }
+        let minutes = record
+            .answered_at
+            .zip(record.ended_at)
+            .map(|(a, e)| (e - a).div_ceil(60))
+            .unwrap_or(0);
+        let text = format!(
+            "📞 Call summary ({minutes} min):\n{}",
+            truncate(&summary, 3500)
+        );
+        if let Err(e) = self
+            .client
+            .send_message(&self.owner_jid(), wa::Message::text(text))
+            .await
+        {
+            log::warn!("call {id}: could not send summary: {e}");
+        }
+    }
+}
+
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(max).collect();
+    out.push('…');
+    out
+}
+
+async fn terminate(handle: &CallHandle) {
+    match handle.terminate().await {
+        CallTermination::LocalOnly(e) => log::warn!("hangup not confirmed by peer: {e}"),
+        CallTermination::PartlyNotified { unconfirmed, .. } => {
+            log::warn!("hangup unconfirmed on {unconfirmed} device(s)")
+        }
+        _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transcript_fragments_merge_by_speaker() {
+        let mut r = CallRecord::new("inbound", "");
+        r.append("owner", "Hey, ");
+        r.append("owner", "what's up?");
+        r.append("assistant", "Not much.");
+        r.append("owner", "Ok");
+        assert_eq!(r.transcript.len(), 3);
+        assert_eq!(
+            r.transcript_text(),
+            "owner: Hey, what's up?\nassistant: Not much.\nowner: Ok"
+        );
+    }
+
+    #[test]
+    fn one_call_at_a_time() {
+        let calls = Calls::default();
+        let first = calls.begin("outbound", "a").unwrap();
+        assert!(calls.begin("inbound", "b").is_err());
+        calls.finish(&first.id, Status::Completed, "done");
+        assert_eq!(calls.get(&first.id).unwrap().status, Status::Completed);
+        assert!(calls.active().is_none());
+        assert!(calls.begin("inbound", "b").is_ok());
+        assert_eq!(calls.recent(1)[0].direction, "inbound");
+    }
+
+    #[test]
+    fn truncates_on_char_boundary() {
+        assert_eq!(truncate("héllo", 2), "hé…");
+        assert_eq!(truncate("hi", 5), "hi");
+    }
+}

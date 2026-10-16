@@ -1,0 +1,64 @@
+# Builds the sidecar from source for each platform on a version tag, attaches the binaries to the
+# GitHub release with SHA256SUMS, and records a GitHub build attestation for each binary, so
+# `hermes whatsapp-voice install` (and anyone else) can verify where a binary came from:
+#   gh attestation verify <binary> --repo ashwanthbalakrishnan5/hermes-whatsapp-voice
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  create:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: gh release view "$GITHUB_REF_NAME" || gh release create "$GITHUB_REF_NAME" --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  build:
+    needs: create
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            asset: hermes-wa-voice_linux_amd64
+          - runner: ubuntu-24.04-arm
+            asset: hermes-wa-voice_linux_arm64
+          - runner: macos-latest
+            asset: hermes-wa-voice_darwin_arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build
+        working-directory: sidecar
+        run: |
+          cargo build --release --locked
+          cp target/release/hermes-wa-voice "../${{ matrix.asset }}"
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: ${{ matrix.asset }}
+      - run: gh release upload "$GITHUB_REF_NAME" "${{ matrix.asset }}" --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  checksums:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          mkdir dist && cd dist
+          gh release download "$GITHUB_REF_NAME" --pattern 'hermes-wa-voice_*'
+          sha256sum hermes-wa-voice_* > SHA256SUMS
+          gh release upload "$GITHUB_REF_NAME" SHA256SUMS --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
