@@ -33,6 +33,29 @@ pub struct Setup {
     pub voice: String,
     pub system_instruction: String,
     pub functions: Vec<Value>,
+    /// Owner-supplied setup fields (the `live_config` setting), merged over the defaults.
+    pub overrides: Value,
+}
+
+/// Deep-merges `over` into `base`: objects merge key by key, anything else replaces.
+/// `tools` is appended instead, so owner tools (e.g. googleSearch) add to ask_hermes/end_call.
+fn merge(base: &mut Value, over: &Value) {
+    match (base, over) {
+        (Value::Object(b), Value::Object(o)) => {
+            for (key, value) in o {
+                match (key.as_str(), b.get_mut(key)) {
+                    ("tools", Some(Value::Array(existing))) if value.is_array() => {
+                        existing.extend(value.as_array().unwrap().iter().cloned())
+                    }
+                    (_, Some(slot)) => merge(slot, value),
+                    (_, None) => {
+                        b.insert(key.clone(), value.clone());
+                    }
+                }
+            }
+        }
+        (slot, value) => *slot = value.clone(),
+    }
 }
 
 impl Setup {
@@ -59,6 +82,7 @@ impl Setup {
         if !self.functions.is_empty() {
             setup["tools"] = json!([{"functionDeclarations": self.functions}]);
         }
+        merge(&mut setup, &self.overrides);
         json!({"setup": setup})
     }
 }
@@ -440,12 +464,57 @@ mod tests {
     }
 
     #[test]
+    fn live_config_overrides_merge_into_setup() {
+        let setup = Setup {
+            model: "gemini-3.8-live".into(),
+            voice: "Kore".into(),
+            system_instruction: "be brief".into(),
+            functions: vec![json!({"name": "end_call"})],
+            overrides: json!({
+                "generationConfig": {"temperature": 0.4, "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Puck"}}}},
+                "realtimeInputConfig": {"automaticActivityDetection": {"silenceDurationMs": 900}},
+                "inputAudioTranscription": {"languageCodes": ["ta-IN", "en-US"]},
+                "tools": [{"googleSearch": {}}],
+            }),
+        };
+        let m = &setup.message(None)["setup"];
+        let gen_cfg = &m["generationConfig"];
+        assert_eq!(gen_cfg["temperature"], 0.4);
+        assert_eq!(
+            gen_cfg["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"],
+            "Puck"
+        );
+        assert_eq!(
+            gen_cfg["responseModalities"][0], "AUDIO",
+            "untouched defaults stay"
+        );
+        assert_eq!(
+            m["realtimeInputConfig"]["automaticActivityDetection"]["silenceDurationMs"],
+            900
+        );
+        assert_eq!(
+            m["realtimeInputConfig"]["activityHandling"],
+            "START_OF_ACTIVITY_INTERRUPTS"
+        );
+        assert_eq!(m["inputAudioTranscription"]["languageCodes"][0], "ta-IN");
+        assert_eq!(
+            m["tools"][0]["functionDeclarations"][0]["name"], "end_call",
+            "plugin tools kept"
+        );
+        assert!(
+            m["tools"][1].get("googleSearch").is_some(),
+            "owner tools appended"
+        );
+    }
+
+    #[test]
     fn setup_message_shape() {
         let setup = Setup {
             model: "gemini-3.8-live".into(),
             voice: "Kore".into(),
             system_instruction: "be brief".into(),
             functions: vec![json!({"name": "end_call"})],
+            overrides: json!({}),
         };
         let m = setup.message(Some("h1"));
         assert_eq!(m["setup"]["model"], "models/gemini-3.8-live");
@@ -472,6 +541,7 @@ mod tests {
             functions: vec![
                 json!({"name": "end_call", "description": "Hang up.", "behavior": "NON_BLOCKING"}),
             ],
+            overrides: json!({}),
         };
         let mut live = Live::connect(&key, setup).await.expect("connect");
         live.send_text("Say hello.");

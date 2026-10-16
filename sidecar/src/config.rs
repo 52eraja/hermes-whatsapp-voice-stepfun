@@ -18,6 +18,8 @@ pub struct Config {
     pub assistant_name: String,
     /// The owner's own extra rules for the voice (style, language, call length).
     pub voice_instructions: String,
+    /// Raw Gemini Live setup fields (JSON object) merged over the defaults.
+    pub live_config: serde_json::Value,
     pub hermes_api_url: String,
     /// Empty disables ask_hermes.
     pub hermes_api_key: String,
@@ -56,6 +58,15 @@ pub fn parse_duration(s: &str) -> Result<Duration> {
     Ok(Duration::from_secs(secs))
 }
 
+fn live_config(raw: &str) -> Result<serde_json::Value> {
+    let value: serde_json::Value =
+        serde_json::from_str(raw).context("live_config is not valid JSON")?;
+    if !value.is_object() {
+        bail!("live_config must be a JSON object of Gemini Live setup fields");
+    }
+    Ok(value)
+}
+
 pub fn digits(number: &str) -> String {
     number.chars().filter(char::is_ascii_digit).collect()
 }
@@ -80,6 +91,7 @@ impl Config {
             voice: var("HWV_VOICE", "Kore"),
             assistant_name: var("HWV_ASSISTANT_NAME", "Hermes"),
             voice_instructions: var("HWV_VOICE_INSTRUCTIONS", ""),
+            live_config: live_config(&var("HWV_LIVE_CONFIG", "{}"))?,
             hermes_api_url: var("HERMES_API_URL", "http://127.0.0.1:8642")
                 .trim_end_matches('/')
                 .to_string(),
@@ -106,6 +118,13 @@ mod tests {
         assert_eq!(parse_duration("15m").unwrap(), Duration::from_secs(900));
         assert_eq!(parse_duration("90").unwrap(), Duration::from_secs(90));
         assert!(parse_duration("5x").is_err());
+    }
+
+    #[test]
+    fn live_config_must_be_an_object() {
+        assert_eq!(live_config("{}").unwrap(), serde_json::json!({}));
+        assert!(live_config("[1]").is_err());
+        assert!(live_config("{bad").is_err());
     }
 
     #[test]

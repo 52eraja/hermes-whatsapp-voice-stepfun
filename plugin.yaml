@@ -1,7 +1,7 @@
 name: hermes-whatsapp-voice
 label: WhatsApp Voice Calls
 kind: standalone
-version: 0.1.4
+version: 0.1.5
 manifest_version: 2
 api_version: 1
 description: >-
@@ -48,6 +48,10 @@ config_schema:
     type: str
     default: ""
     description: "Your own extra instructions for the voice, e.g. language, tone, or 'keep calls very short'"
+  live_config:
+    type: dict
+    default: {}
+    description: "Advanced: any Gemini Live setup fields (voice, temperature, VAD, transcription languages, tools...), merged over the plugin's defaults. Field reference: https://ai.google.dev/api/live"
   listen:
     type: str
     default: "127.0.0.1:8796"

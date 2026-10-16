@@ -501,6 +501,7 @@ impl Bridge {
             voice: self.cfg.voice.clone(),
             system_instruction,
             functions,
+            overrides: self.cfg.live_config.clone(),
         }
     }
 
