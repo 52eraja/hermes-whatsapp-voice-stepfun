@@ -31,48 +31,60 @@ config_schema:
     type: str
     default: ""
     required: true
-    description: "Your WhatsApp number in international format (e.g. +15551234567). The only number that is called and the only caller that is answered."
+    label: "Your WhatsApp number"
+    description: "International format, e.g. +15551234567. The only number called, and the only caller answered."
   voice_model:
     type: str
     default: "gemini-3.8-live"
-    description: "Gemini Live model"
+    label: "Voice model"
+    description: "Gemini Live model ID."
   voice:
     type: str
     default: "Kore"
-    description: "Gemini prebuilt voice name"
+    label: "Voice"
+    description: "Gemini prebuilt voice, e.g. Kore, Puck, Charon."
   assistant_name:
     type: str
     default: "Hermes"
-    description: "Name the voice uses when Hermes gives no persona briefing (the briefing normally supplies the name)"
+    label: "Fallback name"
+    description: "Used only when Hermes gives no persona briefing."
   voice_instructions:
     type: str
     default: ""
-    description: "Your own extra instructions for the voice, e.g. language, tone, or 'keep calls very short'"
-  live_config:
-    type: dict
-    default: {}
-    description: "Advanced: any Gemini Live setup fields (voice, temperature, VAD, transcription languages, tools...), merged over the plugin's defaults. Field reference: https://ai.google.dev/api/live"
-  listen:
-    type: str
-    default: "127.0.0.1:8796"
-    description: "Loopback address the sidecar's HTTP API binds to"
-  hermes_api_url:
-    type: str
-    default: "http://127.0.0.1:8642"
-    description: "Hermes API server base URL used for ask_hermes during calls"
+    label: "Voice instructions"
+    description: "Your own rules for the voice: language, tone, call length."
   ring_timeout_seconds:
     type: int
     default: 45
-    description: "How long an outbound call rings before it counts as unanswered"
+    label: "Ring time (seconds)"
+    description: "How long an outgoing call rings before it counts as unanswered."
   max_call_minutes:
     type: int
     default: 15
-    description: "Hard limit on a single call's length"
+    label: "Longest call (minutes)"
+    description: "Calls end automatically after this."
   answer_inbound:
     type: bool
     default: true
-    description: "Answer calls from owner_number. Calls from anyone else are never answered."
+    label: "Answer my calls"
+    description: "Pick up when your number calls the bot. Other callers are never answered."
   send_summary:
     type: bool
     default: true
-    description: "Send a WhatsApp message with a call summary after each call"
+    label: "Send call summary"
+    description: "Message a short WhatsApp summary after each call."
+  live_config:
+    type: dict
+    default: {}
+    label: "Gemini Live overrides"
+    description: "Any Live API setup field, merged over the defaults. Reference: https://ai.google.dev/api/live"
+  listen:
+    type: str
+    default: "127.0.0.1:8796"
+    label: "Sidecar address"
+    description: "Loopback address of the sidecar's local API."
+  hermes_api_url:
+    type: str
+    default: "http://127.0.0.1:8642"
+    label: "Hermes API URL"
+    description: "Where the voice reaches Hermes."
