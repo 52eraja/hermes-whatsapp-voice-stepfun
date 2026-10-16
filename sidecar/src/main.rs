@@ -22,7 +22,7 @@ use whatsapp_rust::pair_code::PairCodeOptions;
 use whatsapp_rust::prelude::*;
 use whatsapp_rust::wacore::types::call::CallAction;
 
-use crate::calls::Bridge;
+use crate::calls::{Bridge, Signal};
 use crate::config::{Config, digits};
 
 #[tokio::main]
@@ -112,14 +112,26 @@ impl EventHandler for CallObserver {
         let Event::IncomingCall(call) = &*event else {
             return;
         };
-        let CallAction::Offer {
-            call_creator,
-            caller_pn,
-            group_jid: None,
-            ..
-        } = &call.action
-        else {
-            return;
+        let (call_creator, caller_pn) = match &call.action {
+            CallAction::Offer {
+                call_creator,
+                caller_pn,
+                group_jid: None,
+                ..
+            } => (call_creator, caller_pn),
+            CallAction::PreAccept { call_id, .. } => {
+                return self.bridge.on_ring_signal(call_id, Signal::Ringing);
+            }
+            CallAction::Accept { call_id, .. } => {
+                return self.bridge.on_ring_signal(call_id, Signal::Accepted);
+            }
+            // `busy`/`enc` mean one device could not take the call; the others keep ringing.
+            CallAction::Reject {
+                call_id,
+                reason: None,
+                ..
+            } => return self.bridge.on_ring_signal(call_id, Signal::Declined),
+            _ => return,
         };
         if !self.bridge.cfg.answer_inbound {
             return;

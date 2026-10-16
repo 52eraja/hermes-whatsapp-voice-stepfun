@@ -63,33 +63,30 @@ This is the only number that will ever be called, and the only caller that will 
 hermes config set plugins.entries.hermes-whatsapp-voice.settings.owner_number +15551234567
 ```
 
-### 2. Install the sidecar
+### 2. Link the sidecar to the bot's WhatsApp number (once)
 
 ```bash
-hermes whatsapp-voice install
+hermes whatsapp-voice pair --phone +15550001111   # the BOT's number; prints a pair code
+hermes whatsapp-voice pair                        # or show a QR code instead
 ```
 
-This downloads the binary for your platform from this repo's GitHub release. It checks the binary
-against the release's `SHA256SUMS`. If the GitHub CLI is installed, it also checks the GitHub build
-attestation, which proves the binary was built from this repository by its release workflow.
+On the **bot's** phone, open WhatsApp > Linked devices > Link a device > Link with phone number
+instead, and type the code.
 
-Prebuilt binaries cover linux amd64/arm64 and macOS arm64. Anywhere else, or if you'd rather build
-it yourself, you need Rust 1.94+, cmake and a C compiler:
+The first run also fetches the sidecar binary for your platform from this repo's GitHub release.
+You don't need Rust or any other toolchain. The download is checked against the release's
+`SHA256SUMS`. If the GitHub CLI is installed, its GitHub build attestation is checked too, which
+proves it was built from this repository by its release workflow. Prebuilt binaries cover linux
+amd64/arm64 and macOS arm64. To build it yourself instead (Rust 1.94+, cmake, a C compiler), run
+`hermes whatsapp-voice install --from-source`.
 
-```bash
-hermes whatsapp-voice install --from-source
-```
+> **Why a separate link when Hermes is already logged in to WhatsApp?** WhatsApp lets each linked
+> device keep only one live connection. Sharing Hermes's WhatsApp session would make the two
+> connections knock each other offline, and Hermes's messaging would break. Only the bot's phone
+> can approve a new device, so the link happens once. It uses one of WhatsApp's four linked-device
+> slots.
 
-### 3. Link it to the bot's WhatsApp number
-
-```bash
-hermes whatsapp-voice pair                    # shows a QR code
-hermes whatsapp-voice pair --phone +15550001111   # or a pair code, handy over SSH
-```
-
-On the **bot's** phone, open WhatsApp > Linked devices > Link a device.
-
-### 4. Enable the Hermes API server (recommended)
+### 3. Enable the Hermes API server (recommended)
 
 ```bash
 # in ~/.hermes/.env
@@ -99,7 +96,7 @@ API_SERVER_KEY=<a long random string>
 
 Restart the gateway after this.
 
-### 5. Run the sidecar
+### 4. Run the sidecar
 
 ```bash
 hermes whatsapp-voice serve      # foreground, to try it out

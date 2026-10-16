@@ -4,6 +4,7 @@
 //! dropped socket it reconnects with the latest session-resumption handle, so the conversation
 //! carries on and callers only ever see one stream of events.
 
+use std::collections::VecDeque;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -14,6 +15,7 @@ use serde_json::{Value, json};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
+use tokio::time::{Instant, sleep_until};
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
@@ -84,7 +86,18 @@ pub enum LiveEvent {
 struct Parsed {
     events: Vec<LiveEvent>,
     resume_handle: Option<String>,
-    go_away: bool,
+    turn_complete: bool,
+    /// Set on `goAway`: how long the server will keep this connection open.
+    go_away: Option<Duration>,
+}
+
+/// Parses protobuf JSON durations like "5s" or "1.500s".
+fn parse_time_left(v: &Value) -> Duration {
+    v.as_str()
+        .and_then(|s| s.strip_suffix('s'))
+        .and_then(|s| s.parse::<f64>().ok())
+        .map(Duration::from_secs_f64)
+        .unwrap_or(Duration::ZERO)
 }
 
 fn parse_server_message(msg: &Value) -> Parsed {
@@ -112,6 +125,7 @@ fn parse_server_message(msg: &Value) -> Parsed {
         {
             p.events.push(LiveEvent::OutputTranscript(t.to_string()));
         }
+        p.turn_complete = sc["turnComplete"].as_bool() == Some(true);
     }
     for fc in msg["toolCall"]["functionCalls"]
         .as_array()
@@ -137,12 +151,18 @@ fn parse_server_message(msg: &Value) -> Parsed {
     {
         p.resume_handle = Some(h.to_string());
     }
-    p.go_away = msg.get("goAway").is_some();
+    p.go_away = msg.get("goAway").map(|g| parse_time_left(&g["timeLeft"]));
     p
 }
 
+/// Caller audio is only worth sending live; everything else must arrive even across a reconnect.
+enum Outgoing {
+    Audio(String),
+    Control(String),
+}
+
 pub struct Live {
-    outbox: mpsc::UnboundedSender<String>,
+    outbox: mpsc::UnboundedSender<Outgoing>,
     pub events: mpsc::UnboundedReceiver<LiveEvent>,
     task: JoinHandle<()>,
 }
@@ -161,15 +181,16 @@ impl Live {
     }
 
     fn send(&self, msg: Value) {
-        let _ = self.outbox.send(msg.to_string());
+        let _ = self.outbox.send(Outgoing::Control(msg.to_string()));
     }
 
     /// 16 kHz mono caller audio.
     pub fn send_audio(&self, pcm: &[i16]) {
-        self.send(json!({"realtimeInput": {"audio": {
+        let msg = json!({"realtimeInput": {"audio": {
             "data": B64.encode(i16_to_le_bytes(pcm)),
             "mimeType": "audio/pcm;rate=16000",
-        }}}));
+        }}});
+        let _ = self.outbox.send(Outgoing::Audio(msg.to_string()));
     }
 
     pub fn send_text(&self, text: &str) {
@@ -237,17 +258,38 @@ enum Turnover {
     Stop,
 }
 
+/// Runs one connection. `backlog` holds control messages that must go out first; a message whose
+/// send fails is put back so the next connection delivers it.
 async fn pump(
     ws: &mut Ws,
-    out_rx: &mut mpsc::UnboundedReceiver<String>,
+    out_rx: &mut mpsc::UnboundedReceiver<Outgoing>,
+    backlog: &mut VecDeque<String>,
     ev_tx: &mpsc::UnboundedSender<LiveEvent>,
     resume_handle: &mut Option<String>,
 ) -> Turnover {
+    while let Some(text) = backlog.pop_front() {
+        if let Err(e) = ws.send(Message::text(text.clone())).await {
+            backlog.push_front(text);
+            return Turnover::Reconnect(format!("send failed: {e}"));
+        }
+    }
+    // After goAway, let the current turn finish (resumption restores state only up to the
+    // last checkpoint) unless the server is about to close anyway.
+    let mut leave_at: Option<Instant> = None;
     loop {
         tokio::select! {
+            _ = sleep_until(leave_at.unwrap_or_else(Instant::now)), if leave_at.is_some() => {
+                return Turnover::Reconnect("goAway".into());
+            }
             out = out_rx.recv() => match out {
-                Some(text) => {
+                Some(Outgoing::Audio(text)) => {
                     if let Err(e) = ws.send(Message::text(text)).await {
+                        return Turnover::Reconnect(format!("send failed: {e}"));
+                    }
+                }
+                Some(Outgoing::Control(text)) => {
+                    if let Err(e) = ws.send(Message::text(text.clone())).await {
+                        backlog.push_back(text);
                         return Turnover::Reconnect(format!("send failed: {e}"));
                     }
                 }
@@ -275,7 +317,10 @@ async fn pump(
                         return Turnover::Stop;
                     }
                 }
-                if parsed.go_away {
+                if let Some(time_left) = parsed.go_away {
+                    leave_at = Some(Instant::now() + time_left.saturating_sub(Duration::from_secs(1)));
+                }
+                if leave_at.is_some() && parsed.turn_complete {
                     return Turnover::Reconnect("goAway".into());
                 }
             }
@@ -287,13 +332,22 @@ async fn run(
     api_key: String,
     setup: Setup,
     mut ws: Ws,
-    mut out_rx: mpsc::UnboundedReceiver<String>,
+    mut out_rx: mpsc::UnboundedReceiver<Outgoing>,
     ev_tx: mpsc::UnboundedSender<LiveEvent>,
 ) {
     let mut resume_handle = None;
+    let mut backlog = VecDeque::new();
     let mut failures = 0;
     loop {
-        let why = match pump(&mut ws, &mut out_rx, &ev_tx, &mut resume_handle).await {
+        let why = match pump(
+            &mut ws,
+            &mut out_rx,
+            &mut backlog,
+            &ev_tx,
+            &mut resume_handle,
+        )
+        .await
+        {
             Turnover::Stop => return,
             Turnover::Reconnect(why) => why,
         };
@@ -318,6 +372,12 @@ async fn run(
                     let _ = ev_tx.send(LiveEvent::Closed(format!("could not resume: {e:#}")));
                     return;
                 }
+            }
+        }
+        // Audio that piled up during the gap is stale; control messages are kept in order.
+        while let Ok(out) = out_rx.try_recv() {
+            if let Outgoing::Control(text) = out {
+                backlog.push_back(text);
             }
         }
     }
@@ -354,6 +414,7 @@ mod tests {
             "toolCallCancellation": {"ids": ["c0"]},
             "sessionResumptionUpdate": {"newHandle": "h2", "resumable": true},
             "goAway": {"timeLeft": "5s"},
+            "serverContent": {"turnComplete": true},
         });
         let p = parse_server_message(&msg);
         assert_eq!(
@@ -368,7 +429,8 @@ mod tests {
             ]
         );
         assert_eq!(p.resume_handle.as_deref(), Some("h2"));
-        assert!(p.go_away);
+        assert!(p.turn_complete);
+        assert_eq!(p.go_away, Some(Duration::from_secs(5)));
     }
 
     #[test]

@@ -8,12 +8,11 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use anyhow::{Result, bail};
 use serde::Serialize;
 use serde_json::{Value, json};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 use whatsapp_rust::async_channel;
 use whatsapp_rust::prelude::*;
-use whatsapp_rust::voip::session::CallPhase;
 use whatsapp_rust::voip::{CallHandle, CallTermination};
 use whatsapp_rust::wacore::types::call::IncomingCall;
 
@@ -172,11 +171,24 @@ impl Calls {
     }
 }
 
+/// What the callee's devices have said about an outbound call. whatsapp-rust leaves an outgoing
+/// 1:1 call's phase at `Calling`, so answering is learned from the peer's call signaling.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Signal {
+    Pending,
+    Ringing,
+    Accepted,
+    Declined,
+}
+
 pub struct Bridge {
     pub cfg: Config,
     pub client: Arc<Client>,
     pub calls: Calls,
     hermes: Option<Hermes>,
+    /// `Some` only while an outbound call rings; keyed by WhatsApp call id. Signals can arrive
+    /// before `start()` returns the id, so whichever side comes first creates the entry.
+    ring_signals: Mutex<Option<HashMap<String, watch::Sender<Signal>>>>,
 }
 
 impl Bridge {
@@ -188,6 +200,69 @@ impl Bridge {
             client,
             calls: Calls::default(),
             hermes,
+            ring_signals: Mutex::new(None),
+        }
+    }
+
+    /// Called for the peer's preaccept/accept/reject stanzas.
+    pub fn on_ring_signal(&self, call_id: &str, signal: Signal) {
+        if let Some(map) = self.ring_signals.lock().unwrap().as_mut() {
+            map.entry(call_id.to_string())
+                .or_insert_with(|| watch::channel(Signal::Pending).0)
+                .send_replace(signal);
+        }
+    }
+
+    fn ring_signal_rx(&self, call_id: &str) -> Option<watch::Receiver<Signal>> {
+        let mut guard = self.ring_signals.lock().unwrap();
+        let map = guard.as_mut()?;
+        Some(
+            map.entry(call_id.to_string())
+                .or_insert_with(|| watch::channel(Signal::Pending).0)
+                .subscribe(),
+        )
+    }
+
+    /// Rings until the owner answers (true) or the call is declined, ends, or times out (false,
+    /// with the call record finished).
+    async fn ring(&self, id: &str, handle: &CallHandle) -> bool {
+        let Some(mut rx) = self.ring_signal_rx(handle.call_id()) else {
+            return false;
+        };
+        let ended = handle.wait_ended();
+        tokio::pin!(ended);
+        let outcome = tokio::time::timeout(self.cfg.ring_timeout, async {
+            loop {
+                match *rx.borrow_and_update() {
+                    Signal::Accepted => return Some(true),
+                    Signal::Declined => return Some(false),
+                    Signal::Ringing => self.calls.update(id, |r| r.status = Status::Ringing),
+                    Signal::Pending => {}
+                }
+                tokio::select! {
+                    _ = &mut ended => return None,
+                    changed = rx.changed() => if changed.is_err() { return None },
+                }
+            }
+        })
+        .await;
+        match outcome {
+            Ok(Some(true)) => true,
+            Ok(Some(false)) => {
+                terminate(handle).await;
+                self.calls.finish(id, Status::Rejected, "declined");
+                false
+            }
+            Ok(None) => {
+                self.calls
+                    .finish(id, Status::Rejected, "ended before answer");
+                false
+            }
+            Err(_) => {
+                terminate(handle).await;
+                self.calls.finish(id, Status::NoAnswer, "no answer");
+                false
+            }
         }
     }
 
@@ -214,6 +289,9 @@ impl Bridge {
                 return *entry.phone_number == *self.cfg.owner;
             }
         }
+        log::warn!(
+            "call from {creator}: no phone number known for this LID, so it cannot be matched to the owner"
+        );
         false
     }
 
@@ -225,49 +303,32 @@ impl Bridge {
     pub async fn run_outbound(self: Arc<Self>, id: String, reason: String, details: String) {
         let (mic_tx, mic_rx) = async_channel::bounded::<Vec<i16>>(8);
         let (spk_tx, spk_rx) = async_channel::bounded::<Vec<i16>>(64);
-        let handle = match self
+        *self.ring_signals.lock().unwrap() = Some(HashMap::new());
+        let started = self
             .client
             .voip()
             .call(&self.owner_jid())
             .audio(mic_rx, spk_tx)
             .start()
-            .await
-        {
-            Ok(h) => h,
-            Err(e) => {
-                return self.calls.finish(
-                    &id,
-                    Status::Failed,
-                    format!("could not place call: {e}"),
+            .await;
+        let answered = match &started {
+            Ok(handle) => {
+                log::info!(
+                    "call {id}: dialing owner (whatsapp call {})",
+                    handle.call_id()
                 );
+                self.ring(&id, handle).await
+            }
+            Err(e) => {
+                self.calls
+                    .finish(&id, Status::Failed, format!("could not place call: {e}"));
+                false
             }
         };
-        log::info!(
-            "call {id}: dialing owner (whatsapp call {})",
-            handle.call_id()
-        );
-
-        // Ring until answered, declined, or timed out.
-        let deadline = Instant::now() + self.cfg.ring_timeout;
-        loop {
-            match handle.phase() {
-                Some(CallPhase::Connecting | CallPhase::Active) => break,
-                Some(CallPhase::Ringing) => self.calls.update(&id, |r| r.status = Status::Ringing),
-                Some(CallPhase::Ended) | None => {
-                    return self.calls.finish(
-                        &id,
-                        Status::Rejected,
-                        "declined or ended before answer",
-                    );
-                }
-                _ => {}
-            }
-            if Instant::now() >= deadline {
-                terminate(&handle).await;
-                return self.calls.finish(&id, Status::NoAnswer, "no answer");
-            }
-            tokio::time::sleep(Duration::from_millis(250)).await;
-        }
+        *self.ring_signals.lock().unwrap() = None;
+        let (Ok(handle), true) = (started, answered) else {
+            return;
+        };
 
         let opening = format!(
             "(The owner just answered the call you placed. Greet them and get to the point: {reason})"
@@ -563,7 +624,7 @@ impl Bridge {
         let minutes = record
             .answered_at
             .zip(record.ended_at)
-            .map(|(a, e)| (e - a).div_ceil(60))
+            .map(|(a, e)| e.saturating_sub(a).div_ceil(60))
             .unwrap_or(0);
         let text = format!(
             "📞 Call summary ({minutes} min):\n{}",

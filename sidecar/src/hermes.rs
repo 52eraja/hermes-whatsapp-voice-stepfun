@@ -14,6 +14,33 @@ pub struct Hermes {
     key: String,
 }
 
+/// Stops the run unless disarmed, so a run whose caller gave up (timeout, cancelled tool call,
+/// call ended) does not keep acting on the owner's behalf with nobody listening.
+struct StopOnDrop {
+    hermes: Hermes,
+    run_id: String,
+    armed: bool,
+}
+
+impl Drop for StopOnDrop {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let (hermes, run_id) = (self.hermes.clone(), self.run_id.clone());
+        if let Ok(rt) = tokio::runtime::Handle::try_current() {
+            rt.spawn(async move {
+                let _ = hermes
+                    .http
+                    .post(format!("{}/v1/runs/{run_id}/stop", hermes.base))
+                    .bearer_auth(&hermes.key)
+                    .send()
+                    .await;
+            });
+        }
+    }
+}
+
 impl Hermes {
     pub fn new(base: &str, key: &str) -> Self {
         Self {
@@ -24,6 +51,18 @@ impl Hermes {
             base: base.to_string(),
             key: key.to_string(),
         }
+    }
+
+    async fn poll(&self, run_id: &str) -> Result<Value> {
+        Ok(self
+            .http
+            .get(format!("{}/v1/runs/{run_id}", self.base))
+            .bearer_auth(&self.key)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?)
     }
 
     /// Start a run and wait for its final answer.
@@ -50,33 +89,30 @@ impl Hermes {
             .as_str()
             .context("no run_id in response")?
             .to_string();
+        let mut guard = StopOnDrop {
+            hermes: self.clone(),
+            run_id: run_id.clone(),
+            armed: true,
+        };
 
         let deadline = Instant::now() + timeout;
         loop {
             tokio::time::sleep(Duration::from_secs(1)).await;
-            let run: Value = self
-                .http
-                .get(format!("{}/v1/runs/{run_id}", self.base))
-                .bearer_auth(&self.key)
-                .send()
-                .await?
-                .error_for_status()?
-                .json()
-                .await?;
-            let status = run["status"].as_str().unwrap_or("unknown");
-            if TERMINAL.contains(&status) {
-                if status != "completed" {
-                    bail!("Hermes run {status}: {}", run["error"]);
+            match self.poll(&run_id).await {
+                Ok(run) => {
+                    let status = run["status"].as_str().unwrap_or("unknown");
+                    if TERMINAL.contains(&status) {
+                        guard.armed = false;
+                        if status != "completed" {
+                            bail!("Hermes run {status}: {}", run["error"]);
+                        }
+                        return Ok(run["output"].as_str().unwrap_or_default().to_string());
+                    }
                 }
-                return Ok(run["output"].as_str().unwrap_or_default().to_string());
+                // Transient (Hermes restarting, a slow response): keep trying until the deadline.
+                Err(e) => log::warn!("polling Hermes run {run_id}: {e:#}"),
             }
             if Instant::now() >= deadline {
-                let _ = self
-                    .http
-                    .post(format!("{}/v1/runs/{run_id}/stop", self.base))
-                    .bearer_auth(&self.key)
-                    .send()
-                    .await;
                 bail!("Hermes did not finish within {}s", timeout.as_secs());
             }
         }

@@ -89,13 +89,15 @@ def _install(args) -> None:
 
 
 def _require_ready(ctx) -> Path:
-    exe = binary_path()
-    if not exe.exists():
-        raise SystemExit("Sidecar not installed. Run: hermes whatsapp-voice install")
     if not settings(ctx)["owner_number"]:
         raise SystemExit(
             "Set your number first: hermes config set plugins.entries.hermes-whatsapp-voice.settings.owner_number +15551234567"
         )
+    exe = binary_path()
+    if not exe.exists():
+        # First run: fetch the prebuilt sidecar so nobody needs a Rust toolchain.
+        exe.parent.mkdir(parents=True, exist_ok=True)
+        _download_release(exe)
     return exe
 
 
