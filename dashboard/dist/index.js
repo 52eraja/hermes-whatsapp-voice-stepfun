@@ -33,9 +33,6 @@
     );
   }
 
-  function Dot({ state }) {
-    return h("span", { className: "hwv-dot" + (state === "off" ? " is-off" : state === "warn" ? " is-warn" : "") });
-  }
 
   function readiness(status) {
     const s = status.sidecar;
@@ -44,26 +41,8 @@
       { key: "owner", ok: !!status.owner_number, label: "Your number", hint: "Set your WhatsApp number in Settings below." },
       { key: "hermes", ok: status.hermes_api_key, label: "Hermes API", hint: "Set API_SERVER_ENABLED=true and an API_SERVER_KEY (Keys page), then restart the gateway." },
       { key: "linked", ok: !!(s && s.logged_in) || status.pairing === "linked", label: "WhatsApp linked", hint: "Link the bot's WhatsApp number once." },
-      { key: "sidecar", ok: !!s, label: "Sidecar", hint: "Start the background service: hermes whatsapp-voice service (see the setup guide), or Restart." },
+      { key: "sidecar", ok: !!s, label: "Sidecar", hint: "Not running. Restart it, or install the background service: hermes whatsapp-voice service." },
     ];
-  }
-
-  function StatusStrip({ status, checks, onRestart, busy }) {
-    const ready = checks.every((c) => c.ok);
-    const s = status.sidecar;
-    return h(
-      "section",
-      { className: "hwv-card hwv-strip" },
-      h("span", { className: "hwv-state" }, h(Dot, { state: ready ? "on" : "warn" }), ready ? "Ready" : "Needs setup"),
-      h(
-        "div",
-        { className: "hwv-indicators" },
-        ...checks.map((c) =>
-          h("span", { key: c.key, className: "hwv-indicator" }, h(Dot, { state: c.ok ? "on" : "off" }), c.key === "sidecar" && s ? "Sidecar v" + s.version : c.label),
-        ),
-      ),
-      h("div", { className: "hwv-actions" }, h(Button, { size: "sm", variant: "outline", disabled: busy, onClick: onRestart }, busy ? "Restarting…" : "Restart sidecar")),
-    );
   }
 
   function Pairing() {
@@ -93,7 +72,7 @@
     if (state === "linked") return h("div", { className: "hwv-step-hint" }, "Linked. Restart the sidecar to start using it.");
     return h(
       "div",
-      null,
+      { style: { marginTop: ".75rem" } },
       state === "waiting"
         ? h(
             "div",
@@ -112,7 +91,7 @@
     );
   }
 
-  function Setup({ checks }) {
+  function Setup({ checks, onRestart, restarting }) {
     const missing = checks.filter((c) => !c.ok);
     if (missing.length === 0) return null;
     return Card(
@@ -127,9 +106,11 @@
             h(
               "li",
               { key: c.key, className: "hwv-step" },
-              h(Dot, { state: "off" }),
+              h("span", { className: "hwv-dot is-off" }),
               h("div", null, h("div", { className: "hwv-step-title" }, c.label), h("div", { className: "hwv-step-hint" }, c.hint), c.key === "linked" && h(Pairing)),
-              h("span"),
+              c.key === "sidecar"
+                ? h(Button, { size: "sm", variant: "outline", disabled: restarting, onClick: onRestart }, restarting ? "Restarting…" : "Restart")
+                : h("span"),
             ),
           ),
         ),
@@ -170,16 +151,19 @@
 
     const bar = h(
       "div",
-      { className: "hwv-callbar" },
+      { className: "hwv-callbar", style: { marginBottom: "1rem" } },
       h(Input, { placeholder: "Test call about…", value: reason, onChange: (e) => setReason(e.target.value), disabled: !canCall }),
       h(Button, { size: "sm", disabled: !canCall, onClick: call }, "Call me"),
     );
 
-    return Card(
-      { title: "Calls", actions: bar },
+    return h(
+      "details",
+      { className: "hwv-card hwv-history" },
+      h("summary", { className: "hwv-card-head" }, h("h2", { className: "hwv-card-title" }, "Call history"), h("span", { className: "hwv-muted hwv-small" }, calls.length === 1 ? "1 call" : calls.length + " calls")),
       h(
         "div",
         { className: "hwv-card-body" },
+        bar,
         note && h("div", { className: "hwv-small hwv-muted", style: { marginBottom: ".75rem" } }, note),
         calls.length === 0
           ? h("div", { className: "hwv-muted hwv-small" }, "No calls since the sidecar started. Call your bot's number, or use Call me.")
@@ -353,10 +337,9 @@
     return h(
       "div",
       { className: "hwv-page" },
-      h(StatusStrip, { status, checks, onRestart: restart, busy: restarting }),
-      h(Setup, { checks }),
-      h(Calls, { canCall: linked }),
+      h(Setup, { checks, onRestart: restart, restarting }),
       h(Settings, { onApplied: () => setTimeout(refresh, 4000) }),
+      h(Calls, { canCall: linked }),
     );
   }
 
