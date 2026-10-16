@@ -148,3 +148,36 @@ def test_settings_match_manifest_and_hermes_key_rules(plugin):
     for key, spec in manifest["config_schema"].items():
         assert spec.get("default") == plugin.sidecar_client.SETTINGS[key] or key == "owner_number"
     plugin.sidecar_client.settings(FakeCtx())  # every key must be readable through Hermes
+
+
+def test_dashboard_settings_reject_unknown_keys_and_wrong_types(plugin, monkeypatch, tmp_path):
+    import importlib.util
+    import sys
+    import types
+
+    saved = {}
+    state = types.ModuleType("hermes_cli.plugins_state")
+    state._plugin_relative_segments = lambda key: (key,)
+    state.save_plugin_setting = lambda plugin_id, segments, value: saved.update({segments: value})
+    monkeypatch.setitem(sys.modules, "hermes_cli", types.ModuleType("hermes_cli"))
+    monkeypatch.setitem(sys.modules, "hermes_cli.plugins_state", state)
+    spec = importlib.util.spec_from_file_location(
+        "hwv_dashboard_api", plugin.cli.PLUGIN_DIR / "dashboard" / "plugin_api.py"
+    )
+    api = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(api)
+
+    from fastapi import HTTPException
+
+    for bad in (
+        {"not_a_setting": 1},
+        {"ring_timeout_seconds": "45"},
+        {"answer_inbound": "yes"},
+        {"ring_timeout_seconds": True},
+    ):
+        with pytest.raises(HTTPException):
+            api.save_settings(bad)
+    assert saved == {}, "nothing is written when any value is rejected"
+
+    api.save_settings({"voice": "Puck", "ring_timeout_seconds": 30, "live_config": {"generationConfig": {}}})
+    assert saved == {("voice",): "Puck", ("ring_timeout_seconds",): 30, ("live_config",): {"generationConfig": {}}}

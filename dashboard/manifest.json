@@ -1,0 +1,12 @@
+{
+  "name": "hermes-whatsapp-voice",
+  "label": "WhatsApp Voice",
+  "description": "Pair, configure and test WhatsApp voice calls with Hermes",
+  "icon": "MessageSquare",
+  "tab": {
+    "path": "/whatsapp-voice",
+    "position": "end"
+  },
+  "entry": "dist/index.js",
+  "api": "plugin_api.py"
+}
