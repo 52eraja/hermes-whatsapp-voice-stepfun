@@ -16,6 +16,8 @@ pub struct Config {
     pub model: String,
     pub voice: String,
     pub assistant_name: String,
+    /// The owner's own extra rules for the voice (style, language, call length).
+    pub voice_instructions: String,
     pub hermes_api_url: String,
     /// Empty disables ask_hermes.
     pub hermes_api_key: String,
@@ -77,6 +79,7 @@ impl Config {
             model: var("HWV_MODEL", "gemini-3.8-live"),
             voice: var("HWV_VOICE", "Kore"),
             assistant_name: var("HWV_ASSISTANT_NAME", "Hermes"),
+            voice_instructions: var("HWV_VOICE_INSTRUCTIONS", ""),
             hermes_api_url: var("HERMES_API_URL", "http://127.0.0.1:8642")
                 .trim_end_matches('/')
                 .to_string(),

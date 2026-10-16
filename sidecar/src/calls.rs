@@ -436,8 +436,13 @@ impl Bridge {
         } else {
             "You cannot take actions or look things up during this call; say so if asked."
         };
-        let system_instruction =
-            system_instruction(&self.cfg.assistant_name, &persona, tools_note, context);
+        let system_instruction = system_instruction(
+            &self.cfg.assistant_name,
+            &persona,
+            &self.cfg.voice_instructions,
+            tools_note,
+            context,
+        );
         let mut functions = vec![json!({
             "name": "end_call",
             "description": "Hang up the call. Call it only after you have said goodbye.",
@@ -678,7 +683,13 @@ impl Bridge {
     }
 }
 
-fn system_instruction(name: &str, persona: &str, tools_note: &str, context: &str) -> String {
+fn system_instruction(
+    name: &str,
+    persona: &str,
+    owner_instructions: &str,
+    tools_note: &str,
+    context: &str,
+) -> String {
     let identity = if persona.is_empty() {
         format!("You are {name}, the owner's personal assistant.")
     } else {
@@ -690,7 +701,8 @@ fn system_instruction(name: &str, persona: &str, tools_note: &str, context: &str
         "{identity}\n\nYou are talking with the owner on a live WhatsApp voice call.\n\
          - This is a phone call: speak naturally and keep replies short. No lists, markdown, links or emoji.\n\
          - {tools_note}\n\
-         - Keep calls short and direct; don't ask \"anything else?\". Once the purpose is done, say a brief goodbye, and call end_call after the owner says bye back.\n\n\
+         - When the conversation is done, say a brief goodbye and call end_call after the owner says bye.\n\
+         {owner_instructions}\n\n\
          {context}"
     )
 }
@@ -764,11 +776,12 @@ mod tests {
 
     #[test]
     fn persona_replaces_the_default_identity() {
-        let plain = system_instruction("Hermes", "", "tools", "ctx");
+        let plain = system_instruction("Hermes", "", "", "tools", "ctx");
         assert!(plain.starts_with("You are Hermes, the owner's personal assistant."));
         let briefed =
-            system_instruction("Hermes", "You are Nova. Speak Spanish.", "tools", "ctx");
-        assert!(briefed.contains("You are Nova. Speak Spanish."));
+            system_instruction("Hermes", "You are Nova.", "Speak Spanish.", "tools", "ctx");
+        assert!(briefed.contains("You are Nova."));
+        assert!(briefed.contains("Speak Spanish."));
         assert!(!briefed.contains("You are Hermes"));
         assert!(briefed.ends_with("ctx"));
     }

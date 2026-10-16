@@ -136,7 +136,8 @@ Set these with `hermes config set plugins.entries.hermes-whatsapp-voice.settings
 | `owner_number` | (required) | Your number, international format |
 | `voice_model` | `gemini-3.8-live` | Gemini Live model |
 | `voice` | `Kore` | Gemini prebuilt voice |
-| `assistant_name` | `Hermes` | Name the voice agent uses |
+| `assistant_name` | `Hermes` | Fallback name when Hermes gives no persona briefing |
+| `voice_instructions` | (empty) | Your own extra rules for the voice: language, tone, call length |
 | `ring_timeout_seconds` | `45` | How long an outbound call rings |
 | `max_call_minutes` | `15` | Hard cap per call |
 | `answer_inbound` | `true` | Answer calls from `owner_number` |
@@ -145,6 +146,16 @@ Set these with `hermes config set plugins.entries.hermes-whatsapp-voice.settings
 | `hermes_api_url` | `http://127.0.0.1:8642` | Hermes API server |
 
 Restart the sidecar after changing settings.
+
+**Personality.** The voice doesn't use a built-in persona. At startup and after each call, the
+sidecar asks your Hermes for a short briefing: its name, its personality, and what it knows about
+you. The voice then sounds like your Hermes, and changes to Hermes's memory carry over. Use
+`voice_instructions` for anything else, for example:
+
+```bash
+hermes config set plugins.entries.hermes-whatsapp-voice.settings.voice_instructions \
+  "Keep calls very short and direct. Never ask if there is anything else."
+```
 
 ## What this plugin does that you should know about
 
