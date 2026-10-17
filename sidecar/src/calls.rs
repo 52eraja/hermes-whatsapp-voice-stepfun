@@ -95,6 +95,13 @@ impl CallRecord {
         }
     }
 
+    /// Whether the assistant spoke last and ended on a question.
+    fn ends_with_question(&self) -> bool {
+        self.transcript
+            .last()
+            .is_some_and(|t| t.role == "assistant" && t.text.trim_end().ends_with('?'))
+    }
+
     pub fn transcript_text(&self) -> String {
         self.transcript
             .iter()
@@ -628,8 +635,14 @@ impl Bridge {
                             tool_tasks.insert(tool_id, task);
                         }
                         "end_call" => {
-                            live.send_tool_response(&tool_id, &name, json!({"ok": true}), "SILENT");
-                            hangup.requested(Instant::now());
+                            // The model sometimes asks a question and hangs up in the same turn.
+                            if self.calls.get(id).is_some_and(|r| r.ends_with_question()) {
+                                live.send_tool_response(&tool_id, &name, json!({"error":
+                                    "You just asked the owner a question. Wait for their answer, and end the call only after they say bye."}), "SILENT");
+                            } else {
+                                live.send_tool_response(&tool_id, &name, json!({"ok": true}), "SILENT");
+                                hangup.requested(Instant::now());
+                            }
                         }
                         _ => live.send_tool_response(&tool_id, &name, json!({"error": "unknown function"}), "WHEN_IDLE"),
                     },
@@ -777,6 +790,18 @@ mod tests {
             r.transcript_text(),
             "owner: Hey, what's up?\nassistant: Not much.\nowner: Ok"
         );
+    }
+
+    #[test]
+    fn detects_a_trailing_question() {
+        let mut r = CallRecord::new("outbound", "");
+        assert!(!r.ends_with_question());
+        r.append("assistant", "Ashwanth. Is that better? ");
+        assert!(r.ends_with_question());
+        r.append("owner", "Yes.");
+        assert!(!r.ends_with_question(), "the owner answered");
+        r.append("assistant", "Great, talk soon!");
+        assert!(!r.ends_with_question());
     }
 
     #[test]
