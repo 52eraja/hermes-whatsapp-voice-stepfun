@@ -12,6 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
+import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
 RESERVED_SETTING_ROOTS = {"model", "plugins", "security", "settings"}
@@ -29,12 +30,15 @@ def _stub_hermes_modules(data_root: Path) -> None:
         return path
 
     storage.plugin_data_dir = plugin_data_dir
+    hermes_yaml = types.ModuleType("hermes_yaml")
+    hermes_yaml.safe_load = yaml.safe_load
     sys.modules.update(
         {
             "agent": types.ModuleType("agent"),
             "agent.secret_scope": secret_scope,
             "plugins": types.ModuleType("plugins"),
             "plugins.plugin_storage": storage,
+            "hermes_yaml": hermes_yaml,
         }
     )
 

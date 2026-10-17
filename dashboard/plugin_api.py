@@ -15,8 +15,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-import yaml
 from fastapi import APIRouter, HTTPException
+from hermes_yaml import safe_load
 
 PLUGIN_DIR = Path(__file__).resolve().parent.parent
 PLUGIN_ID = "hermes-whatsapp-voice"
@@ -37,7 +37,7 @@ _pair_proc: subprocess.Popen | None = None
 
 
 def _schema() -> dict:
-    return yaml.safe_load((PLUGIN_DIR / "plugin.yaml").read_text())["config_schema"]
+    return safe_load((PLUGIN_DIR / "plugin.yaml").read_text())["config_schema"]
 
 
 class _SettingsCtx:
