@@ -24,6 +24,8 @@ use crate::hermes::Hermes;
 const KEEP_RECORDS: usize = 50;
 const FRAME_INTERVAL: Duration = Duration::from_millis(60);
 const HERMES_TIMEOUT: Duration = Duration::from_secs(180);
+const STILL_CONNECTED: &str = "(The call is still connected: the owner spoke after your goodbye. \
+    Answer them, and call end_call again once they are done.)";
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -223,83 +225,50 @@ impl RingSignals {
     }
 }
 
-/// When to hang up after the model calls end_call: wait briefly for the owner's own goodbye, but
-/// call it off if they keep talking ("I have another question"). Calling it off also tells the
-/// model the line is still open, since it otherwise believes the call is over and never ends it.
+/// Decides when a call is over, without reading transcripts (they lag, and come out in the wrong
+/// language). The model ends the call itself, after the owner's goodbye; the sidecar hangs up once
+/// that goodbye has finished playing and a short quiet window passes. Any owner speech in the window
+/// calls the hangup off. A long silence ends a call nobody closed.
 #[derive(Default)]
-struct Hangup {
-    at: Option<Instant>,
-    /// What the owner said since end_call, to tell a goodbye from more conversation.
-    heard: String,
+struct Ending {
+    requested: bool,
+    /// When playback went quiet after end_call.
+    quiet_since: Option<Instant>,
+    last_activity: Option<Instant>,
 }
 
-impl Hangup {
-    const WAIT_FOR_BYE: Duration = Duration::from_secs(6);
-    const AFTER_BYE: Duration = Duration::from_millis(1200);
-    const WAIT_FOR_MORE: Duration = Duration::from_millis(2500);
+impl Ending {
+    const GRACE: Duration = Duration::from_secs(3);
+    const IDLE: Duration = Duration::from_secs(30);
 
-    fn requested(&mut self, now: Instant) {
-        self.at = Some(now + Self::WAIT_FOR_BYE);
-        self.heard.clear();
+    fn request(&mut self) {
+        self.requested = true;
+        self.quiet_since = None;
     }
 
-    /// Returns true when the owner kept talking and the hangup was called off.
-    fn owner_spoke(&mut self, now: Instant, text: &str) -> bool {
-        if self.at.is_none() {
-            return false;
+    /// Returns true when this called off a pending hangup.
+    fn owner_spoke(&mut self, now: Instant) -> bool {
+        self.last_activity = Some(now);
+        self.quiet_since = None;
+        std::mem::take(&mut self.requested)
+    }
+
+    /// Why the call should end now, if it should. `playing`: model speech is still being played;
+    /// `working`: a request to Hermes is pending, so silence is expected.
+    fn check(&mut self, now: Instant, playing: bool, working: bool) -> Option<&'static str> {
+        if playing {
+            self.last_activity = Some(now);
+            self.quiet_since = None;
+            return None;
         }
-        self.heard.push_str(text);
-        if is_goodbye(&self.heard) {
-            self.at = Some(now + Self::AFTER_BYE);
-            false
-        } else if self.heard.split_whitespace().count() >= 3 {
-            self.at = None;
-            true
-        } else {
-            // "Okay..." might still become "okay, bye": wait for the rest.
-            self.at = Some(now + Self::WAIT_FOR_MORE);
-            false
+        if self.requested && now.duration_since(*self.quiet_since.get_or_insert(now)) >= Self::GRACE
+        {
+            return Some("assistant ended the call");
         }
+        let last = *self.last_activity.get_or_insert(now);
+        (!working && now.duration_since(last) >= Self::IDLE)
+            .then_some("no one spoke for 30 seconds")
     }
-
-    fn due(&self, now: Instant) -> bool {
-        self.at.is_some_and(|t| now >= t)
-    }
-}
-
-/// shortcut: an English word list (plus "bye" in Devanagari and Tamil script, which speech
-/// recognition sometimes produces); a goodbye it misses only means the line stays open until the
-/// model ends the call again.
-fn is_goodbye(text: &str) -> bool {
-    let text = text.to_lowercase();
-    let words: Vec<&str> = text
-        .split(|c: char| !c.is_alphanumeric() && c != '\'')
-        .filter(|w| !w.is_empty())
-        .collect();
-    let word = |w: &str| words.contains(&w);
-    [
-        "bye",
-        "byee",
-        "goodbye",
-        "cya",
-        "ciao",
-        "cheers",
-        "बाय",
-        "பை",
-    ]
-    .iter()
-    .any(|w| word(w))
-        || [
-            "see you",
-            "see ya",
-            "talk soon",
-            "talk later",
-            "catch you later",
-            "take care",
-            "good night",
-        ]
-        .iter()
-        .any(|p| text.contains(p))
 }
 
 pub struct Bridge {
@@ -528,10 +497,17 @@ impl Bridge {
         } else {
             "You cannot take actions or look things up during this call; say so if asked."
         };
+        let mut owner_instructions = self.cfg.voice_instructions.clone();
+        if let Some(first) = self.cfg.languages.first() {
+            owner_instructions.push_str(&format!(
+                "\n- Speak only these languages: {}. If the owner uses any other language, reply in {first}.",
+                self.cfg.languages.join(", ")
+            ));
+        }
         let system_instruction = system_instruction(
             &self.cfg.assistant_name,
             &persona,
-            &self.cfg.voice_instructions,
+            &owner_instructions,
             tools_note,
             context,
         );
@@ -562,6 +538,7 @@ impl Bridge {
             voice: self.cfg.voice.clone(),
             system_instruction,
             functions,
+            languages: self.cfg.languages.clone(),
             overrides: self.cfg.live_config.clone(),
         }
     }
@@ -642,7 +619,7 @@ impl Bridge {
         let mut down = Downsampler::new();
         let (tool_tx, mut tool_rx) = mpsc::unbounded_channel::<(String, Value)>();
         let mut tool_tasks: HashMap<String, JoinHandle<()>> = HashMap::new();
-        let mut hangup = Hangup::default();
+        let mut ending = Ending::default();
         let mut check = tokio::time::interval(Duration::from_millis(200));
         let max_duration = tokio::time::sleep(self.cfg.max_duration);
         let ended = handle.wait_ended();
@@ -668,16 +645,21 @@ impl Bridge {
                     live.send_tool_response(&tool_id, "ask_hermes", result, "WHEN_IDLE");
                 }
                 _ = check.tick() => {
-                    if hangup.due(Instant::now()) && playout.buffered() == 0 {
-                        break "assistant ended the call".to_string();
+                    if let Some(why) = ending.check(Instant::now(), playout.buffered() > 0, !tool_tasks.is_empty()) {
+                        break why.to_string();
                     }
                 }
                 ev = live.events.recv() => match ev {
                     Some(LiveEvent::Audio(pcm)) => playout.push(&down.process(&pcm)),
-                    Some(LiveEvent::Interrupted) => playout.clear(),
+                    Some(LiveEvent::Interrupted) => {
+                        playout.clear();
+                        if ending.owner_spoke(Instant::now()) {
+                            live.send_text(STILL_CONNECTED);
+                        }
+                    }
                     Some(LiveEvent::InputTranscript(t)) => {
-                        if hangup.owner_spoke(Instant::now(), &t) {
-                            live.send_text("(The call is still connected: the owner kept talking after your goodbye. Answer them, and call end_call again once they are done.)");
+                        if ending.owner_spoke(Instant::now()) {
+                            live.send_text(STILL_CONNECTED);
                         }
                         self.calls.update(id, |r| r.append("owner", &t));
                     }
@@ -695,7 +677,7 @@ impl Bridge {
                                     "You just asked the owner a question. Wait for their answer, and end the call only after they say bye."}), "SILENT");
                             } else {
                                 live.send_tool_response(&tool_id, &name, json!({"ok": true}), "SILENT");
-                                hangup.requested(Instant::now());
+                                ending.request();
                             }
                         }
                         _ => live.send_tool_response(&tool_id, &name, json!({"error": "unknown function"}), "WHEN_IDLE"),
@@ -803,7 +785,9 @@ fn system_instruction(
         "{identity}\n\nYou are talking with the owner on a live WhatsApp voice call.\n\
          - This is a phone call: speak naturally and keep replies short. No lists, markdown, links or emoji.\n\
          - {tools_note}\n\
-         - When the conversation is done, say a brief goodbye and call end_call after the owner says bye.\n\
+         - End the call when the owner says goodbye, or once the purpose is done and they have nothing \
+         more: give a brief goodbye and call end_call in that same reply. Never call end_call while \
+         asking a question.\n\
          {owner_instructions}\n\n\
          {context}"
     )
@@ -901,60 +885,68 @@ mod tests {
     }
 
     #[test]
-    fn hangup_waits_for_bye_but_not_for_more_conversation() {
+    fn ending_waits_for_the_goodbye_to_play_then_a_quiet_window() {
         let t0 = Instant::now();
-        let ms = |n| t0 + Duration::from_millis(n);
-        let mut h = Hangup::default();
-        assert!(
-            !h.owner_spoke(t0, "hello there friend"),
-            "no effect before end_call"
+        let at = |ms| t0 + Duration::from_millis(ms);
+        let mut e = Ending::default();
+        assert_eq!(e.check(t0, false, false), None);
+
+        e.request();
+        assert_eq!(
+            e.check(at(1_000), true, false),
+            None,
+            "goodbye still playing"
         );
-        assert!(!h.due(ms(60_000)));
-
-        h.requested(t0);
-        assert!(!h.due(ms(5_000)));
-        assert!(h.due(ms(6_000)), "silent owner: hang up after the wait");
-
-        h.requested(t0);
-        assert!(!h.owner_spoke(ms(2_000), "Bye."));
-        assert!(!h.due(ms(3_000)));
-        assert!(h.due(ms(3_200)), "goodbye: hang up shortly after");
-
-        h.requested(t0);
-        assert!(!h.owner_spoke(ms(2_000), "Okay,"), "too short to judge");
-        assert!(!h.due(ms(4_000)));
-        assert!(!h.owner_spoke(ms(3_000), " see you!"));
-        assert!(h.due(ms(4_200)));
-
-        h.requested(t0);
-        assert!(
-            h.owner_spoke(ms(2_000), "Wait, I have another question"),
-            "more conversation calls it off"
+        assert_eq!(
+            e.check(at(2_000), false, false),
+            None,
+            "quiet window starts"
         );
-        assert!(!h.due(ms(60_000)));
+        assert_eq!(e.check(at(4_900), false, false), None);
+        assert_eq!(
+            e.check(at(5_000), false, false),
+            Some("assistant ended the call")
+        );
     }
 
     #[test]
-    fn recognizes_goodbyes() {
-        for g in [
-            "Bye.",
-            "okay bye!",
-            "Goodbye",
-            "See you later",
-            "talk soon",
-            "Take care.",
-            "बाय",
-        ] {
-            assert!(is_goodbye(g), "{g}");
-        }
-        for not in [
-            "I have another question",
-            "Byers market",
-            "Yes, sounds right",
-            "remind me later today",
-        ] {
-            assert!(!is_goodbye(not), "{not}");
-        }
+    fn owner_speech_calls_the_hangup_off() {
+        let t0 = Instant::now();
+        let at = |ms| t0 + Duration::from_millis(ms);
+        let mut e = Ending::default();
+        assert!(!e.owner_spoke(t0), "nothing to call off before end_call");
+
+        e.request();
+        assert_eq!(e.check(at(1_000), false, false), None);
+        assert!(
+            e.owner_spoke(at(2_000)),
+            "\"I have another question\", in any language"
+        );
+        assert_eq!(e.check(at(20_000), false, false), None, "call stays up");
+    }
+
+    #[test]
+    fn silence_ends_an_unclosed_call_unless_hermes_is_working() {
+        let t0 = Instant::now();
+        let at = |s| t0 + Duration::from_secs(s);
+        let mut e = Ending::default();
+        e.owner_spoke(t0);
+        assert_eq!(e.check(at(29), false, false), None);
+        assert_eq!(e.check(at(31), false, true), None, "waiting on ask_hermes");
+        assert_eq!(
+            e.check(at(31), false, false),
+            Some("no one spoke for 30 seconds")
+        );
+        assert_eq!(
+            e.check(at(32), true, false),
+            None,
+            "model speech is activity"
+        );
+        assert_eq!(e.check(at(61), false, false), None);
+        assert_eq!(
+            e.check(at(62), false, false),
+            Some("no one spoke for 30 seconds")
+        );
     }
 
     #[test]

@@ -17,6 +17,7 @@ Restart the sidecar after a change: the dashboard's **Restart sidecar** button, 
 | `voice_model` | `gemini-3.8-live` | Gemini Live model |
 | `voice` | `Kore` | Gemini prebuilt voice |
 | `assistant_name` | `Hermes` | Fallback name when Hermes gives no persona briefing |
+| `languages` | (empty) | Language codes the voice may speak and listen for, e.g. `en-US, ta-IN`; empty allows any |
 | `voice_instructions` | (empty) | Your own extra rules for the voice: language, tone, call length |
 | `live_config` | `{}` | Advanced: any Gemini Live setup field, merged over the defaults (see below) |
 | `ring_timeout_seconds` | `45` | How long an outbound call rings |

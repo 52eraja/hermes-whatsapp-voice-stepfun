@@ -33,6 +33,8 @@ pub struct Setup {
     pub voice: String,
     pub system_instruction: String,
     pub functions: Vec<Value>,
+    /// Language codes to pin speech recognition to; empty lets Gemini detect the language.
+    pub languages: Vec<String>,
     /// Owner-supplied setup fields (the `live_config` setting), merged over the defaults.
     pub overrides: Value,
 }
@@ -67,7 +69,11 @@ impl Setup {
                 "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": self.voice}}},
             },
             "systemInstruction": {"parts": [{"text": self.system_instruction}]},
-            "inputAudioTranscription": {},
+            "inputAudioTranscription": if self.languages.is_empty() {
+                json!({})
+            } else {
+                json!({"languageCodes": self.languages})
+            },
             "outputAudioTranscription": {},
             "realtimeInputConfig": {
                 "automaticActivityDetection": {"silenceDurationMs": 600},
@@ -470,6 +476,7 @@ mod tests {
             voice: "Kore".into(),
             system_instruction: "be brief".into(),
             functions: vec![json!({"name": "end_call"})],
+            languages: vec!["en-US".into(), "ta-IN".into()],
             overrides: json!({
                 "generationConfig": {"temperature": 0.4, "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Puck"}}}},
                 "realtimeInputConfig": {"automaticActivityDetection": {"silenceDurationMs": 900}},
@@ -496,7 +503,10 @@ mod tests {
             m["realtimeInputConfig"]["activityHandling"],
             "START_OF_ACTIVITY_INTERRUPTS"
         );
-        assert_eq!(m["inputAudioTranscription"]["languageCodes"][0], "ta-IN");
+        assert_eq!(
+            m["inputAudioTranscription"]["languageCodes"][0], "ta-IN",
+            "live_config wins over languages"
+        );
         assert_eq!(
             m["tools"][0]["functionDeclarations"][0]["name"], "end_call",
             "plugin tools kept"
@@ -508,12 +518,30 @@ mod tests {
     }
 
     #[test]
+    fn languages_pin_speech_recognition() {
+        let setup = Setup {
+            model: "m".into(),
+            voice: "v".into(),
+            system_instruction: String::new(),
+            functions: vec![],
+            languages: vec!["en-US".into(), "ta-IN".into()],
+            overrides: json!({}),
+        };
+        let m = &setup.message(None)["setup"];
+        assert_eq!(
+            m["inputAudioTranscription"]["languageCodes"],
+            json!(["en-US", "ta-IN"])
+        );
+    }
+
+    #[test]
     fn setup_message_shape() {
         let setup = Setup {
             model: "gemini-3.8-live".into(),
             voice: "Kore".into(),
             system_instruction: "be brief".into(),
             functions: vec![json!({"name": "end_call"})],
+            languages: vec![],
             overrides: json!({}),
         };
         let m = setup.message(Some("h1"));
@@ -530,6 +558,7 @@ mod tests {
     }
 
     /// Live check against the real API: `GEMINI_API_KEY=... cargo test -- --ignored`.
+    /// `HWV_LIVE_CONFIG='{...}'` also sends those setup overrides, to check the API accepts them.
     #[tokio::test]
     #[ignore]
     async fn live_round_trip() {
@@ -541,7 +570,10 @@ mod tests {
             functions: vec![
                 json!({"name": "end_call", "description": "Hang up.", "behavior": "NON_BLOCKING"}),
             ],
-            overrides: json!({}),
+            languages: vec![],
+            overrides: std::env::var("HWV_LIVE_CONFIG")
+                .map(|raw| serde_json::from_str(&raw).expect("HWV_LIVE_CONFIG JSON"))
+                .unwrap_or_else(|_| json!({})),
         };
         let mut live = Live::connect(&key, setup).await.expect("connect");
         live.send_text("Say hello.");

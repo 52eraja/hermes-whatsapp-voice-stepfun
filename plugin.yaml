@@ -1,7 +1,7 @@
 name: hermes-whatsapp-voice
 label: WhatsApp Voice Calls
 kind: standalone
-version: 0.1.9
+version: 0.1.10
 manifest_version: 2
 api_version: 1
 description: >-
@@ -48,6 +48,11 @@ config_schema:
     default: "Hermes"
     label: "Fallback name"
     description: "Used only when Hermes gives no persona briefing."
+  languages:
+    type: str
+    default: ""
+    label: "Languages"
+    description: "Comma-separated language codes the voice may speak and listen for, e.g. en-US, ta-IN. Empty: any language."
   voice_instructions:
     type: str
     default: ""

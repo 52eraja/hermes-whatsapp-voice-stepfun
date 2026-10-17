@@ -18,6 +18,8 @@ pub struct Config {
     pub assistant_name: String,
     /// The owner's own extra rules for the voice (style, language, call length).
     pub voice_instructions: String,
+    /// Language codes (e.g. en-US) the voice may use; empty means any.
+    pub languages: Vec<String>,
     /// Raw Gemini Live setup fields (JSON object) merged over the defaults.
     pub live_config: serde_json::Value,
     pub hermes_api_url: String,
@@ -91,6 +93,11 @@ impl Config {
             voice: var("HWV_VOICE", "Kore"),
             assistant_name: var("HWV_ASSISTANT_NAME", "Hermes"),
             voice_instructions: var("HWV_VOICE_INSTRUCTIONS", ""),
+            languages: var("HWV_LANGUAGES", "")
+                .split(',')
+                .map(|l| l.trim().to_string())
+                .filter(|l| !l.is_empty())
+                .collect(),
             live_config: live_config(&var("HWV_LIVE_CONFIG", "{}"))?,
             hermes_api_url: var("HERMES_API_URL", "http://127.0.0.1:8642")
                 .trim_end_matches('/')
