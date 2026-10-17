@@ -223,31 +223,83 @@ impl RingSignals {
     }
 }
 
-/// When to hang up after the model calls end_call: wait briefly for the owner's own goodbye.
-/// Once requested it is never cancelled: the model often answers "bye" with "bye" and then
-/// believes the call is over, so waiting for another end_call would leave the line open.
+/// When to hang up after the model calls end_call: wait briefly for the owner's own goodbye, but
+/// call it off if they keep talking ("I have another question"). Calling it off also tells the
+/// model the line is still open, since it otherwise believes the call is over and never ends it.
 #[derive(Default)]
 struct Hangup {
     at: Option<Instant>,
+    /// What the owner said since end_call, to tell a goodbye from more conversation.
+    heard: String,
 }
 
 impl Hangup {
     const WAIT_FOR_BYE: Duration = Duration::from_secs(6);
     const AFTER_BYE: Duration = Duration::from_millis(1200);
+    const WAIT_FOR_MORE: Duration = Duration::from_millis(2500);
 
     fn requested(&mut self, now: Instant) {
         self.at = Some(now + Self::WAIT_FOR_BYE);
+        self.heard.clear();
     }
 
-    fn owner_spoke(&mut self, now: Instant) {
-        if self.at.is_some() {
+    /// Returns true when the owner kept talking and the hangup was called off.
+    fn owner_spoke(&mut self, now: Instant, text: &str) -> bool {
+        if self.at.is_none() {
+            return false;
+        }
+        self.heard.push_str(text);
+        if is_goodbye(&self.heard) {
             self.at = Some(now + Self::AFTER_BYE);
+            false
+        } else if self.heard.split_whitespace().count() >= 3 {
+            self.at = None;
+            true
+        } else {
+            // "Okay..." might still become "okay, bye": wait for the rest.
+            self.at = Some(now + Self::WAIT_FOR_MORE);
+            false
         }
     }
 
     fn due(&self, now: Instant) -> bool {
         self.at.is_some_and(|t| now >= t)
     }
+}
+
+/// shortcut: an English word list (plus "bye" in Devanagari and Tamil script, which speech
+/// recognition sometimes produces); a goodbye it misses only means the line stays open until the
+/// model ends the call again.
+fn is_goodbye(text: &str) -> bool {
+    let text = text.to_lowercase();
+    let words: Vec<&str> = text
+        .split(|c: char| !c.is_alphanumeric() && c != '\'')
+        .filter(|w| !w.is_empty())
+        .collect();
+    let word = |w: &str| words.contains(&w);
+    [
+        "bye",
+        "byee",
+        "goodbye",
+        "cya",
+        "ciao",
+        "cheers",
+        "बाय",
+        "பை",
+    ]
+    .iter()
+    .any(|w| word(w))
+        || [
+            "see you",
+            "see ya",
+            "talk soon",
+            "talk later",
+            "catch you later",
+            "take care",
+            "good night",
+        ]
+        .iter()
+        .any(|p| text.contains(p))
 }
 
 pub struct Bridge {
@@ -624,7 +676,9 @@ impl Bridge {
                     Some(LiveEvent::Audio(pcm)) => playout.push(&down.process(&pcm)),
                     Some(LiveEvent::Interrupted) => playout.clear(),
                     Some(LiveEvent::InputTranscript(t)) => {
-                        hangup.owner_spoke(Instant::now());
+                        if hangup.owner_spoke(Instant::now(), &t) {
+                            live.send_text("(The call is still connected: the owner kept talking after your goodbye. Answer them, and call end_call again once they are done.)");
+                        }
                         self.calls.update(id, |r| r.append("owner", &t));
                     }
                     Some(LiveEvent::OutputTranscript(t)) => self.calls.update(id, |r| r.append("assistant", &t)),
@@ -847,30 +901,60 @@ mod tests {
     }
 
     #[test]
-    fn hangup_waits_briefly_for_the_owners_bye() {
+    fn hangup_waits_for_bye_but_not_for_more_conversation() {
         let t0 = Instant::now();
+        let ms = |n| t0 + Duration::from_millis(n);
         let mut h = Hangup::default();
         assert!(
-            !h.due(t0 + Duration::from_secs(60)),
-            "no hangup until end_call"
+            !h.owner_spoke(t0, "hello there friend"),
+            "no effect before end_call"
         );
-        h.owner_spoke(t0); // speech before end_call changes nothing
-        assert!(!h.due(t0 + Duration::from_secs(60)));
+        assert!(!h.due(ms(60_000)));
 
         h.requested(t0);
-        assert!(!h.due(t0 + Duration::from_secs(5)));
+        assert!(!h.due(ms(5_000)));
+        assert!(h.due(ms(6_000)), "silent owner: hang up after the wait");
+
+        h.requested(t0);
+        assert!(!h.owner_spoke(ms(2_000), "Bye."));
+        assert!(!h.due(ms(3_000)));
+        assert!(h.due(ms(3_200)), "goodbye: hang up shortly after");
+
+        h.requested(t0);
+        assert!(!h.owner_spoke(ms(2_000), "Okay,"), "too short to judge");
+        assert!(!h.due(ms(4_000)));
+        assert!(!h.owner_spoke(ms(3_000), " see you!"));
+        assert!(h.due(ms(4_200)));
+
+        h.requested(t0);
         assert!(
-            h.due(t0 + Duration::from_secs(6)),
-            "silent owner: hang up after the wait"
+            h.owner_spoke(ms(2_000), "Wait, I have another question"),
+            "more conversation calls it off"
         );
+        assert!(!h.due(ms(60_000)));
+    }
 
-        h.requested(t0);
-        h.owner_spoke(t0 + Duration::from_secs(2)); // "bye!"
-        assert!(!h.due(t0 + Duration::from_millis(3000)));
-        assert!(h.due(t0 + Duration::from_millis(3200)));
-
-        h.owner_spoke(t0 + Duration::from_secs(4)); // more talk only delays it, never cancels
-        assert!(h.due(t0 + Duration::from_millis(5200)));
+    #[test]
+    fn recognizes_goodbyes() {
+        for g in [
+            "Bye.",
+            "okay bye!",
+            "Goodbye",
+            "See you later",
+            "talk soon",
+            "Take care.",
+            "बाय",
+        ] {
+            assert!(is_goodbye(g), "{g}");
+        }
+        for not in [
+            "I have another question",
+            "Byers market",
+            "Yes, sounds right",
+            "remind me later today",
+        ] {
+            assert!(!is_goodbye(not), "{not}");
+        }
     }
 
     #[test]
