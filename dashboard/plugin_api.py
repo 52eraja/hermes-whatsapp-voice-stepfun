@@ -203,7 +203,7 @@ def pair_qr():
 
 @router.post("/call")
 def test_call(body: dict):
-    reason = str(body.get("reason") or "").strip() or "This is a test call from Hermes."
+    reason = str(body.get("reason") or "").strip() or "This is a quick test call."
     try:
         return _client().start_call(reason)
     except sc.SidecarError as e:

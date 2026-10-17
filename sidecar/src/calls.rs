@@ -459,9 +459,11 @@ impl Bridge {
     fn setup(&self, context: &str) -> Setup {
         let persona = self.persona.lock().unwrap().clone();
         let tools_note = if self.hermes.is_some() {
-            "You are the voice of Hermes, the owner's agent, which has their memory, files, calendar, \
-             reminders, messages and tools. For any action, or any fact you do not already know, call \
-             ask_hermes with a clear, self-contained request. Say a few words first, like \"one moment, \
+            // Never name the voice "Hermes" here: the persona briefing supplies the name, and this
+            // line used to override it ("this is a test call from Hermes").
+            "The ask_hermes tool reaches the owner's full agent system, which has their memory, files, \
+             calendar, reminders, messages and tools. For any action, or any fact you do not already \
+             know, call ask_hermes with a clear, self-contained request. Say a few words first, like \"one moment, \
              let me check\"; the answer arrives a little later and you will be told when it does. Never \
              make up results."
         } else {

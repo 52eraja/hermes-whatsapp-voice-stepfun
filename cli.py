@@ -193,7 +193,7 @@ def setup_parser(subparser) -> None:
     subs.add_parser("service", help="Print a systemd/launchd unit that keeps the sidecar running")
     subs.add_parser("status", help="Show sidecar health")
     call = subs.add_parser("call", help="Place a test call to the owner")
-    call.add_argument("reason", nargs="?", default="This is a test call from Hermes.")
+    call.add_argument("reason", nargs="?", default="This is a quick test call.")
 
 
 def make_handler(ctx):
