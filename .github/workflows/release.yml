@@ -43,7 +43,14 @@ jobs:
         run: |
           cargo build --release --locked
           cp target/release/hermes-wa-voice "../${{ matrix.asset }}"
-      - uses: actions/attest-build-provenance@v2
+      # Attestation talks to Sigstore's public log, which times out now and then: retry once.
+      - id: attest
+        uses: actions/attest-build-provenance@v2
+        continue-on-error: true
+        with:
+          subject-path: ${{ matrix.asset }}
+      - if: steps.attest.outcome == 'failure'
+        uses: actions/attest-build-provenance@v2
         with:
           subject-path: ${{ matrix.asset }}
       - run: gh release upload "$GITHUB_REF_NAME" "${{ matrix.asset }}" --clobber
