@@ -228,9 +228,9 @@ impl RingSignals {
 /// Decides when a call is over, without reading transcripts (they lag, and come out in the wrong
 /// language). The model ends the call itself, after the owner's goodbye; the sidecar hangs up once
 /// that goodbye has finished playing and a short quiet window passes. Any owner speech in the window
-/// calls the hangup off. A long silence ends a call nobody closed.
-#[derive(Default)]
+/// calls the hangup off. A long silence ends a call nobody closed (or left on hold too long).
 struct Ending {
+    silence: Duration,
     requested: bool,
     /// When playback went quiet after end_call.
     quiet_since: Option<Instant>,
@@ -239,7 +239,15 @@ struct Ending {
 
 impl Ending {
     const GRACE: Duration = Duration::from_secs(3);
-    const IDLE: Duration = Duration::from_secs(30);
+
+    fn new(silence: Duration) -> Self {
+        Self {
+            silence,
+            requested: false,
+            quiet_since: None,
+            last_activity: None,
+        }
+    }
 
     fn request(&mut self) {
         self.requested = true;
@@ -266,8 +274,8 @@ impl Ending {
             return Some("assistant ended the call");
         }
         let last = *self.last_activity.get_or_insert(now);
-        (!working && now.duration_since(last) >= Self::IDLE)
-            .then_some("no one spoke for 30 seconds")
+        (!working && now.duration_since(last) >= self.silence)
+            .then_some("hung up after a long silence")
     }
 }
 
@@ -619,7 +627,7 @@ impl Bridge {
         let mut down = Downsampler::new();
         let (tool_tx, mut tool_rx) = mpsc::unbounded_channel::<(String, Value)>();
         let mut tool_tasks: HashMap<String, JoinHandle<()>> = HashMap::new();
-        let mut ending = Ending::default();
+        let mut ending = Ending::new(self.cfg.silence_timeout);
         let mut check = tokio::time::interval(Duration::from_millis(200));
         let max_duration = tokio::time::sleep(self.cfg.max_duration);
         let ended = handle.wait_ended();
@@ -888,7 +896,7 @@ mod tests {
     fn ending_waits_for_the_goodbye_to_play_then_a_quiet_window() {
         let t0 = Instant::now();
         let at = |ms| t0 + Duration::from_millis(ms);
-        let mut e = Ending::default();
+        let mut e = Ending::new(Duration::from_secs(30));
         assert_eq!(e.check(t0, false, false), None);
 
         e.request();
@@ -913,7 +921,7 @@ mod tests {
     fn owner_speech_calls_the_hangup_off() {
         let t0 = Instant::now();
         let at = |ms| t0 + Duration::from_millis(ms);
-        let mut e = Ending::default();
+        let mut e = Ending::new(Duration::from_secs(30));
         assert!(!e.owner_spoke(t0), "nothing to call off before end_call");
 
         e.request();
@@ -929,13 +937,13 @@ mod tests {
     fn silence_ends_an_unclosed_call_unless_hermes_is_working() {
         let t0 = Instant::now();
         let at = |s| t0 + Duration::from_secs(s);
-        let mut e = Ending::default();
+        let mut e = Ending::new(Duration::from_secs(30));
         e.owner_spoke(t0);
         assert_eq!(e.check(at(29), false, false), None);
         assert_eq!(e.check(at(31), false, true), None, "waiting on ask_hermes");
         assert_eq!(
             e.check(at(31), false, false),
-            Some("no one spoke for 30 seconds")
+            Some("hung up after a long silence")
         );
         assert_eq!(
             e.check(at(32), true, false),
@@ -945,7 +953,7 @@ mod tests {
         assert_eq!(e.check(at(61), false, false), None);
         assert_eq!(
             e.check(at(62), false, false),
-            Some("no one spoke for 30 seconds")
+            Some("hung up after a long silence")
         );
     }
 

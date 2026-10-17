@@ -105,6 +105,7 @@ def test_sidecar_env(plugin):
     assert env["HWV_RING_TIMEOUT"] == "45s"
     assert env["HWV_LIVE_CONFIG"] == "{}"
     assert env["HWV_LANGUAGES"] == ""
+    assert env["HWV_SILENCE_TIMEOUT"] == "180s"
     assert env["GEMINI_API_KEY"] == "gemini-test"
     assert env["HERMES_API_KEY"] == "hermes-test"
     # A token is minted once and reused.

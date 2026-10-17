@@ -22,6 +22,7 @@ Restart the sidecar after a change: the dashboard's **Restart sidecar** button, 
 | `live_config` | `{}` | Advanced: any Gemini Live setup field, merged over the defaults (see below) |
 | `ring_timeout_seconds` | `45` | How long an outbound call rings |
 | `max_call_minutes` | `15` | Hard cap per call |
+| `silence_hangup_seconds` | `180` | End a call when nobody has spoken for this long (e.g. left on hold) |
 | `answer_inbound` | `true` | Answer calls from `owner_number` |
 | `send_summary` | `true` | Message a summary after each call |
 | `listen` | `127.0.0.1:8796` | Sidecar API address (loopback) |

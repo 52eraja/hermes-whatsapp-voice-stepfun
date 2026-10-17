@@ -33,6 +33,7 @@ SETTINGS: dict[str, Any] = {
     "hermes_api_url": "http://127.0.0.1:8642",
     "ring_timeout_seconds": 45,
     "max_call_minutes": 15,
+    "silence_hangup_seconds": 180,
     "answer_inbound": True,
     "send_summary": True,
 }
@@ -153,6 +154,7 @@ def sidecar_env(ctx) -> dict[str, str]:
         "HWV_LISTEN": str(s["listen"]),
         "HWV_RING_TIMEOUT": f"{int(s['ring_timeout_seconds'])}s",
         "HWV_MAX_DURATION": f"{int(s['max_call_minutes'])}m",
+        "HWV_SILENCE_TIMEOUT": f"{int(s['silence_hangup_seconds'])}s",
         "HWV_ANSWER_INBOUND": "true" if s["answer_inbound"] else "false",
         "HWV_SEND_SUMMARY": "true" if s["send_summary"] else "false",
         "HWV_DATA_DIR": str(data_dir()),

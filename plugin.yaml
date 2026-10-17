@@ -1,7 +1,7 @@
 name: hermes-whatsapp-voice
 label: WhatsApp Voice Calls
 kind: standalone
-version: 0.1.11
+version: 0.1.12
 manifest_version: 2
 api_version: 1
 description: >-
@@ -68,6 +68,11 @@ config_schema:
     default: 15
     label: "Longest call (minutes)"
     description: "Calls end automatically after this."
+  silence_hangup_seconds:
+    type: int
+    default: 180
+    label: "Hang up after silence (seconds)"
+    description: "Ends a call when nobody has spoken for this long, e.g. left on hold."
   answer_inbound:
     type: bool
     default: true

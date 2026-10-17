@@ -27,6 +27,8 @@ pub struct Config {
     pub hermes_api_key: String,
     pub ring_timeout: Duration,
     pub max_duration: Duration,
+    /// End a call after this long with nobody speaking.
+    pub silence_timeout: Duration,
     pub answer_inbound: bool,
     pub send_summary: bool,
 }
@@ -119,6 +121,7 @@ impl Config {
             hermes_api_key: var("HERMES_API_KEY", ""),
             ring_timeout: parse_duration(&var("HWV_RING_TIMEOUT", "45s"))?,
             max_duration: parse_duration(&var("HWV_MAX_DURATION", "15m"))?,
+            silence_timeout: parse_duration(&var("HWV_SILENCE_TIMEOUT", "180s"))?,
             answer_inbound: var("HWV_ANSWER_INBOUND", "true") == "true",
             send_summary: var("HWV_SEND_SUMMARY", "true") == "true",
         })

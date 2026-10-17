@@ -19,7 +19,7 @@
   const GROUPS = [
     { title: "You", keys: ["owner_number"] },
     { title: "Voice", keys: ["voice_model", "voice", "assistant_name", "languages", "voice_instructions"] },
-    { title: "Calls", keys: ["ring_timeout_seconds", "max_call_minutes", "answer_inbound", "send_summary"] },
+    { title: "Calls", keys: ["ring_timeout_seconds", "max_call_minutes", "silence_hangup_seconds", "answer_inbound", "send_summary"] },
   ];
   const WIDE = ["voice_instructions", "live_config"];
 
