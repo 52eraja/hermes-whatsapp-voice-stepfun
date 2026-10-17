@@ -15,7 +15,8 @@ metadata:
 You are setting up the `hermes-whatsapp-voice` plugin for your owner. Work through the steps in
 order. Run each command on the machine where Hermes runs, check the expected result, and stop to ask
 the owner only where a step says **Ask**. Never ask the owner to paste an API key or password into
-the chat: every secret is read from Hermes's own `.env`.
+the chat: every secret is read from Hermes's own `.env`. Paths below assume the default Hermes home
+(`~/.hermes`); if `HERMES_HOME` is set or a profile is active, use that home instead.
 
 Load this file in Hermes with `skill_view("hermes-whatsapp-voice:setup")`, or give its URL to any
 coding agent: https://github.com/ashwanthbalakrishnan5/hermes-whatsapp-voice/blob/main/skills/setup/SKILL.md
@@ -28,8 +29,9 @@ grep -E '^WHATSAPP_MODE=' ~/.hermes/.env
 grep -cE '^(GOOGLE_API_KEY|GEMINI_API_KEY)=' ~/.hermes/.env   # expect 1 or more
 ```
 
-- If `WHATSAPP_MODE=self-chat`: stop. **Tell the owner** that voice calls need a separate bot
-  number (Hermes WhatsApp `bot` mode), because nobody can call their own number.
+- Unless the output is `WHATSAPP_MODE=bot`, stop. A missing line means self-chat mode. **Tell the
+  owner** that voice calls need a separate bot number (Hermes WhatsApp `bot` mode), because nobody
+  can call their own number.
 - If the Gemini count is 0: **Ask** the owner to add a Gemini API key to Hermes with `hermes model`
   (choose Gemini) or to `~/.hermes/.env` as `GOOGLE_API_KEY=...`. Keys come from
   https://aistudio.google.com/apikey. Wait until the count is 1 or more.
@@ -67,8 +69,7 @@ grep -q '^API_SERVER_ENABLED=' ~/.hermes/.env || echo 'API_SERVER_ENABLED=true' 
 grep -q '^API_SERVER_KEY=' ~/.hermes/.env || echo "API_SERVER_KEY=$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')" >> ~/.hermes/.env
 ```
 
-Then restart the gateway: `systemctl --user restart hermes-gateway` if it runs as a service,
-otherwise restart `hermes gateway` however the owner runs it. Check it listens:
+Then restart the gateway: `hermes gateway restart` (or restart the service the owner runs it as). Check it listens:
 `curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8642/v1/runs/x` should print `401`
 or `404`, not `000`.
 
@@ -123,20 +124,23 @@ After each call the owner gets a short WhatsApp summary.
 Tell the owner what they can change, in the dashboard's **WhatsApp Voice** tab, the Desktop app's
 plugin settings, or `hermes config set plugins.entries.hermes-whatsapp-voice.settings.<key> <value>`:
 
-- `voice_instructions`: language, tone, call length (for example "keep calls very short").
-- `voice`, `voice_model`, `ring_timeout_seconds`, `max_call_minutes`, `answer_inbound`, `send_summary`.
+- `voice_instructions`: tone, call length, how to pronounce names (for example "keep calls very short").
+- `languages`: language codes the voice may speak and listen for, for example `en-US, ta-IN`.
+- `voice`, `voice_model`, `assistant_name`, `ring_timeout_seconds`, `max_call_minutes`,
+  `answer_inbound`, `send_summary`.
 - `live_config`: any Gemini Live setup field (https://ai.google.dev/api/live).
 
-Restart the sidecar after changes: the dashboard's **Restart sidecar** button, or
-`systemctl --user restart hermes-whatsapp-voice`.
+Saving in the dashboard applies changes. After `hermes config set`, restart the sidecar:
+`systemctl --user restart hermes-whatsapp-voice` (Linux) or
+`launchctl kickstart -k gui/$(id -u)/com.hermes.whatsapp-voice` (macOS).
 
 ## Troubleshooting
 
 | Symptom | Fix |
 |---|---|
 | `No Gemini API key found` | Step 0: add a Gemini key to Hermes. |
-| `sidecar not reachable` | The service isn't running: `systemctl --user status hermes-whatsapp-voice`. |
+| `sidecar not reachable` | The service isn't running: `systemctl --user status hermes-whatsapp-voice` (Linux) or `launchctl list | grep whatsapp-voice` (macOS). |
 | Service exits with `not linked to WhatsApp yet` | Step 4, then start the service again. |
 | Calls connect but the voice can't do things | `hermes_connected` is false: step 3. |
 | Owner's calls aren't answered | `owner_number` must match the calling phone exactly (country code included). |
-| Logs | `journalctl --user -u hermes-whatsapp-voice -e` |
+| Logs | `journalctl --user -u hermes-whatsapp-voice -e` (Linux) or `~/.hermes/plugin-data/hermes-whatsapp-voice/sidecar.log` (macOS) |

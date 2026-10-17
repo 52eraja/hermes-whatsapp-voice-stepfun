@@ -134,8 +134,8 @@ def test_download_rejects_binary_not_matching_pinned_checksum(plugin, monkeypatc
         def read(self):
             return b"not the real binary"
 
-    monkeypatch.setattr(plugin.cli, "_release_asset", lambda: "hermes-wa-voice_linux_arm64")
-    monkeypatch.setattr(plugin.cli.urllib.request, "urlopen", lambda *a, **k: FakeResponse())
+    monkeypatch.setattr(plugin.sidecar_client, "_release_asset", lambda: "hermes-wa-voice_linux_arm64")
+    monkeypatch.setattr(plugin.sidecar_client.urllib.request, "urlopen", lambda *a, **k: FakeResponse())
     dest = tmp_path / "hermes-wa-voice"
     with pytest.raises(SystemExit, match="Checksum mismatch"):
         plugin.cli._download_release(dest)
@@ -176,6 +176,7 @@ def test_dashboard_settings_reject_unknown_keys_and_wrong_types(plugin, monkeypa
         {"ring_timeout_seconds": "45"},
         {"answer_inbound": "yes"},
         {"ring_timeout_seconds": True},
+        {"max_call_minutes": 0},
     ):
         with pytest.raises(HTTPException):
             api.save_settings(bad)

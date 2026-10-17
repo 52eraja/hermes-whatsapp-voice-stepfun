@@ -17,7 +17,7 @@ device). No WhatsApp Business / Cloud API account is needed.
 
 ```
  your phone ──WhatsApp call──▶ bot number ──▶ hermes-wa-voice (linked device, Rust)
-                                                 │  16 kHz PCM both ways
+                                                 │  call audio (16 kHz in, 24 kHz out, resampled)
                                                  ▼
                                             Gemini Live (speech-to-speech)
                                                  │  ask_hermes(...) tool calls
@@ -100,7 +100,7 @@ amd64/arm64 and macOS arm64. To build it yourself instead (Rust 1.94+, cmake, a 
 ### 3. Enable the Hermes API server (recommended)
 
 ```bash
-# in ~/.hermes/.env
+# in Hermes's .env (~/.hermes/.env by default)
 API_SERVER_ENABLED=true
 API_SERVER_KEY=<a long random string>
 ```
@@ -152,27 +152,36 @@ voice takes its name and personality from your own Hermes. Full reference:
   systemd/launchd unit). The plugin itself only talks to it over loopback HTTP, authenticated with a
   random token stored in the plugin's data directory.
 - **Stored credentials.** The sidecar's WhatsApp linked-device session is stored at
-  `~/.hermes/plugin-data/hermes-whatsapp-voice/whatsapp.db`. Anyone with that file can act as that
-  linked device. Unlink it any time from the bot's phone (Linked devices).
+  `<hermes home>/plugin-data/hermes-whatsapp-voice/whatsapp.db` (the folder is private, mode 700).
+  Anyone with that file can act as that linked device. Unlink it any time from the bot's phone
+  (Linked devices).
 - **Network calls.**
   - WhatsApp servers (signaling and call media relays).
-  - `generativelanguage.googleapis.com`, which receives call audio during calls, using the Gemini
-    key Hermes already has.
-  - Your local Hermes API server, for `ask_hermes`, the post-call summary, and a short persona
-    briefing (Hermes's name, personality and what it knows about you) fetched at startup and after
-    each call so the voice matches your Hermes. Uses `API_SERVER_KEY`.
-  - `github.com`, only when `install` downloads a release.
+  - `generativelanguage.googleapis.com` (Gemini), using the Gemini key Hermes already has. It
+    receives call audio during calls, plus, as text: the persona briefing (Hermes's name,
+    personality and what it knows about you), the reason and details of an outgoing call, and the
+    results of `ask_hermes` requests.
+  - Your local Hermes API server, using `API_SERVER_KEY`, for `ask_hermes` (which runs a full
+    Hermes turn with your tools), the persona briefing (fetched at startup and after each call),
+    and the post-call summary. That summary run asks Hermes to note anything worth remembering, so
+    it can write to Hermes's memory.
+  - `github.com`, to download the sidecar binary on first `pair`/`serve`/`install` (or from the
+    dashboard's Pair button).
 
   Nothing else, and no telemetry.
 - **Who it talks to.** It only answers calls from `owner_number` and only calls `owner_number`.
   Neither tool takes a destination parameter, so a prompt injection cannot make it call anyone else.
   Calls from other numbers are left alone, so the bot's other devices can still take them.
-- **Dashboard tab.** The **WhatsApp Voice** tab's backend runs inside the Hermes dashboard, behind
-  its login. It can save this plugin's settings (only keys declared in `plugin.yaml`, through
-  Hermes's own settings writer), start and stop a pairing session, place a test call to the owner,
-  and restart the sidecar service (`systemctl --user` or `launchctl`).
+- **Commands it runs.**
+  - The dashboard tab's backend (inside the Hermes dashboard, behind its login): `hermes config
+    set` for this plugin's settings (only keys declared in `plugin.yaml`); the sidecar's `pair`;
+    and `systemctl --user restart` or `launchctl kickstart` for the sidecar service.
+  - The CLI: `gh attestation verify` when the GitHub CLI is logged in, and `cargo build` for
+    `install --from-source`.
+  - The setup skill (only when an agent follows it) appends `API_SERVER_ENABLED` and a generated
+    `API_SERVER_KEY` to Hermes's `.env` if they're missing.
 - **Secrets** are read through Hermes (`get_secret`) and passed to the sidecar in its environment.
-  The plugin never reads `.env` itself.
+  The plugin never reads `.env` itself. The sidecar's local API only binds to a loopback address.
 
 ## Caveats
 

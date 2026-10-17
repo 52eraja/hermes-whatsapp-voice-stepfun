@@ -29,8 +29,8 @@ Restart the sidecar after a change: the dashboard's **Restart sidecar** button, 
 
 **Every Gemini Live option.** `live_config` takes any field of the Live API's setup message and
 merges it over the plugin's defaults. Objects merge key by key. `tools` is appended to the
-plugin's own tools rather than replacing them. For example, to change the voice and temperature,
-let the caller pause longer, and pin transcription languages:
+plugin's own tools rather than replacing them. For example, to change the voice and temperature, and
+let the caller pause longer:
 
 ```yaml
 # ~/.hermes/config.yaml
@@ -44,8 +44,10 @@ plugins:
             speechConfig: {voiceConfig: {prebuiltVoiceConfig: {voiceName: Puck}}}
           realtimeInputConfig:
             automaticActivityDetection: {silenceDurationMs: 900, endOfSpeechSensitivity: END_SENSITIVITY_LOW}
-          inputAudioTranscription: {languageCodes: [en-US]}
 ```
+
+For languages, prefer the `languages` setting. A `languageCodes` value inside `live_config` wins
+over it.
 
 What each field does, and which ones a given model supports:
 [Live API reference (setup message)](https://ai.google.dev/api/live),
@@ -71,9 +73,9 @@ hermes config set plugins.entries.hermes-whatsapp-voice.settings.voice_instructi
 
 The plugin never asks for its own keys. It reuses what Hermes already has:
 - **Gemini:** the key of Hermes's Gemini provider, `GOOGLE_API_KEY`, else `GEMINI_API_KEY`, from
-  `~/.hermes/.env`. Add one with `hermes model` (choose Gemini). Google login (Cloud Code OAuth)
+  Hermes's `.env` (`~/.hermes/.env` by default). Add one with `hermes model` (choose Gemini). Google login (Cloud Code OAuth)
   doesn't work for the Live API.
-- **Hermes API server:** `API_SERVER_KEY` from `~/.hermes/.env`. Without it, calls still work but
+- **Hermes API server:** `API_SERVER_KEY` from Hermes's `.env`. Without it, calls still work but
   the voice can't hand tasks to Hermes, and summaries are raw transcripts.
 
 ## Troubleshooting

@@ -49,6 +49,12 @@ fn required(name: &str) -> Result<String> {
 /// Parses "45s", "15m", "1h" or plain seconds.
 pub fn parse_duration(s: &str) -> Result<Duration> {
     let s = s.trim();
+    if s.trim_start_matches('0')
+        .trim_end_matches(['s', 'm', 'h'])
+        .is_empty()
+    {
+        bail!("duration {s:?} must be more than zero");
+    }
     let (num, unit) = s.split_at(s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len()));
     let n: u64 = num.parse().with_context(|| format!("bad duration {s:?}"))?;
     let secs = match unit {
@@ -81,12 +87,20 @@ impl Config {
 
     pub fn from_env() -> Result<Self> {
         let owner = digits(&required("HWV_OWNER")?);
+        let listen = var("HWV_LISTEN", "127.0.0.1:8796");
+        // The API's bearer token travels over plain HTTP, so it must never leave this machine.
+        if !listen
+            .parse::<std::net::SocketAddr>()
+            .is_ok_and(|a| a.ip().is_loopback())
+        {
+            bail!("HWV_LISTEN must be a loopback address like 127.0.0.1:8796, got {listen:?}");
+        }
         if owner.len() < 7 {
             bail!("HWV_OWNER must be a full international phone number");
         }
         Ok(Self {
             owner,
-            listen: var("HWV_LISTEN", "127.0.0.1:8796"),
+            listen,
             token: required("HWV_TOKEN")?,
             gemini_api_key: required("GEMINI_API_KEY")?,
             model: var("HWV_MODEL", "gemini-3.8-live"),
@@ -125,6 +139,8 @@ mod tests {
         assert_eq!(parse_duration("15m").unwrap(), Duration::from_secs(900));
         assert_eq!(parse_duration("90").unwrap(), Duration::from_secs(90));
         assert!(parse_duration("5x").is_err());
+        assert!(parse_duration("0m").is_err());
+        assert!(parse_duration("0").is_err());
     }
 
     #[test]

@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import platform
 import shutil
 import subprocess
 import sys
-import urllib.request
 from pathlib import Path
 
 from .sidecar_client import (
@@ -18,28 +16,13 @@ from .sidecar_client import (
     SidecarError,
     binary_path,
     data_dir,
+    download_release,
     gemini_key,
     settings,
     sidecar_env,
 )
 
-REPO = "ashwanthbalakrishnan5/hermes-whatsapp-voice"
 PLUGIN_DIR = Path(__file__).resolve().parent
-
-
-def _version() -> str:
-    for line in (PLUGIN_DIR / "plugin.yaml").read_text().splitlines():
-        if line.startswith("version:"):
-            return line.split(":", 1)[1].strip()
-    raise RuntimeError("version missing from plugin.yaml")
-
-
-def _release_asset() -> str:
-    goos = {"Linux": "linux", "Darwin": "darwin"}.get(platform.system())
-    goarch = {"x86_64": "amd64", "amd64": "amd64", "arm64": "arm64", "aarch64": "arm64"}.get(platform.machine().lower())
-    if not goos or not goarch:
-        raise SystemExit(f"No prebuilt sidecar for {platform.system()}/{platform.machine()}; use --from-source.")
-    return f"{BINARY_NAME}_{goos}_{goarch}"
 
 
 def _build_from_source(dest: Path) -> None:
@@ -56,38 +39,10 @@ def _build_from_source(dest: Path) -> None:
 
 
 def _download_release(dest: Path) -> None:
-    tag = f"v{_version()}"
-    asset = _release_asset()
-    base = f"https://github.com/{REPO}/releases/download/{tag}"
-    # Pinned in this repo for the release matching plugin.yaml's version, so the code a reviewer
-    # read decides which binary is acceptable.
-    sums_file = PLUGIN_DIR / "sidecar" / "release-checksums.txt"
-    sums = dict(reversed(line.split()) for line in sums_file.read_text().splitlines() if line.strip())
-    if asset not in sums:
-        raise SystemExit(f"No pinned checksum for {asset}; use --from-source.")
-    print(f"Downloading {asset} from the {tag} release of {REPO} ...")
-    with urllib.request.urlopen(f"{base}/{asset}", timeout=120) as resp:
-        blob = resp.read()
-    digest = hashlib.sha256(blob).hexdigest()
-    if sums.get(asset) != digest:
-        raise SystemExit(f"Checksum mismatch for {asset}; refusing to install.")
-    tmp = dest.with_suffix(".download")
-    tmp.write_bytes(blob)
-    tmp.chmod(0o755)
-    if shutil.which("gh"):
-        # Ties the binary to this repo's release workflow (GitHub build attestation).
-        check = subprocess.run(
-            ["gh", "attestation", "verify", str(tmp), "--repo", REPO], capture_output=True, text=True, check=False
-        )
-        if check.returncode != 0:
-            tmp.unlink()
-            raise SystemExit(f"Build attestation check failed:\n{check.stderr}")
-        print("Build attestation verified.")
-    else:
-        print(
-            f"Checksum verified. Install the GitHub CLI to also verify the build attestation (gh attestation verify --repo {REPO})."
-        )
-    tmp.replace(dest)
+    try:
+        download_release(dest)
+    except SidecarError as e:
+        raise SystemExit(str(e)) from e
 
 
 def _install(args) -> None:
@@ -137,9 +92,9 @@ def _service() -> None:
     hermes = shutil.which("hermes") or "hermes"
     log = data_dir() / "sidecar.log"
     if platform.system() == "Darwin":
-        print(f"""<!-- Save as ~/Library/LaunchAgents/com.hermes.whatsapp-voice.plist, then:
+        print(f"""<?xml version="1.0" encoding="UTF-8"?>
+<!-- Save as ~/Library/LaunchAgents/com.hermes.whatsapp-voice.plist, then:
      launchctl load -w ~/Library/LaunchAgents/com.hermes.whatsapp-voice.plist -->
-<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>

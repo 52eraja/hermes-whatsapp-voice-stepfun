@@ -102,6 +102,8 @@ def save_settings(body: dict):
         expected = types.get(spec.get("type", "str"), str)
         if expected is int and isinstance(value, bool) or not isinstance(value, expected):
             raise HTTPException(400, f"{key} must be {spec.get('type', 'str')}")
+        if expected is int and value < 1:
+            raise HTTPException(400, f"{spec.get('label', key)} must be 1 or more")
     for key, value in body.items():
         # The public `hermes config set` CLI (same interpreter, so PATH doesn't matter): it replaces
         # the value, parses JSON objects, ints and booleans, and keeps other text as a string.
@@ -172,7 +174,10 @@ def pair_start():
         raise HTTPException(409, "Already linked. To re-link, unlink the device on the bot's phone first.")
     exe = sc.binary_path()
     if not exe.exists():
-        raise HTTPException(409, "Sidecar not installed yet. Run: hermes whatsapp-voice install")
+        try:
+            sc.download_release(exe)
+        except (sc.SidecarError, OSError) as e:
+            raise HTTPException(502, f"Could not install the sidecar: {e}") from e
     data = sc.data_dir()
     (data / "pair-qr.svg").unlink(missing_ok=True)
     log = open(data / "pair.log", "w")  # noqa: SIM115 - handed to the child process

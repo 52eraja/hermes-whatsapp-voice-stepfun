@@ -834,7 +834,7 @@ mod tests {
     fn detects_a_trailing_question() {
         let mut r = CallRecord::new("outbound", "");
         assert!(!r.ends_with_question());
-        r.append("assistant", "Ashwanth. Is that better? ");
+        r.append("assistant", "Sure. Is that better? ");
         assert!(r.ends_with_question());
         r.append("owner", "Yes.");
         assert!(!r.ends_with_question(), "the owner answered");

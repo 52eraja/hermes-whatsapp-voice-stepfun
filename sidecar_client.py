@@ -2,15 +2,23 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+import platform
 import secrets
+import shutil
+import subprocess
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
 
 PLUGIN_NAME = "hermes-whatsapp-voice"
 BINARY_NAME = "hermes-wa-voice"
+REPO = "ashwanthbalakrishnan5/hermes-whatsapp-voice"
+PLUGIN_DIR = Path(__file__).resolve().parent
 
 # Settings forwarded to the sidecar, with the defaults from plugin.yaml.
 SETTINGS: dict[str, Any] = {
@@ -37,7 +45,9 @@ class SidecarError(Exception):
 def data_dir() -> Path:
     from plugins.plugin_storage import plugin_data_dir
 
-    return plugin_data_dir(PLUGIN_NAME)
+    path = plugin_data_dir(PLUGIN_NAME)
+    path.chmod(0o700)  # holds the WhatsApp session and the sidecar token
+    return path
 
 
 def binary_path() -> Path:
@@ -52,9 +62,68 @@ def token(create: bool = False) -> str:
     if not create:
         raise SidecarError("sidecar has never been started (no token); run: hermes whatsapp-voice serve")
     value = secrets.token_urlsafe(32)
-    path.write_text(value)
-    path.chmod(0o600)
+    with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as f:
+        f.write(value)
     return value
+
+
+def _version() -> str:
+    for line in (PLUGIN_DIR / "plugin.yaml").read_text().splitlines():
+        if line.startswith("version:"):
+            return line.split(":", 1)[1].strip()
+    raise SidecarError("version missing from plugin.yaml")
+
+
+def _release_asset() -> str:
+    goos = {"Linux": "linux", "Darwin": "darwin"}.get(platform.system())
+    goarch = {"x86_64": "amd64", "amd64": "amd64", "arm64": "arm64", "aarch64": "arm64"}.get(platform.machine().lower())
+    if not goos or not goarch:
+        raise SidecarError(
+            f"No prebuilt sidecar for {platform.system()}/{platform.machine()}; build it with --from-source."
+        )
+    return f"{BINARY_NAME}_{goos}_{goarch}"
+
+
+def _gh_logged_in() -> bool:
+    return (
+        bool(shutil.which("gh"))
+        and subprocess.run(["gh", "auth", "status"], capture_output=True, check=False).returncode == 0
+    )
+
+
+def download_release(dest: Path) -> None:
+    """Fetch the prebuilt sidecar for plugin.yaml's version and verify it before installing."""
+    tag = f"v{_version()}"
+    asset = _release_asset()
+    # Pinned in this repo for the release matching plugin.yaml's version, so the code a reviewer
+    # read decides which binary is acceptable.
+    sums_file = PLUGIN_DIR / "sidecar" / "release-checksums.txt"
+    sums = dict(reversed(line.split()) for line in sums_file.read_text().splitlines() if line.strip())
+    if asset not in sums:
+        raise SidecarError(f"No pinned checksum for {asset}; build it with --from-source.")
+    print(f"Downloading {asset} from the {tag} release of {REPO} ...")
+    with urllib.request.urlopen(f"https://github.com/{REPO}/releases/download/{tag}/{asset}", timeout=120) as resp:
+        blob = resp.read()
+    if hashlib.sha256(blob).hexdigest() != sums[asset]:
+        raise SidecarError(f"Checksum mismatch for {asset}; refusing to install.")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(".download")
+    tmp.write_bytes(blob)
+    tmp.chmod(0o755)
+    if _gh_logged_in():
+        # Ties the binary to this repo's release workflow (GitHub build attestation).
+        check = subprocess.run(
+            ["gh", "attestation", "verify", str(tmp), "--repo", REPO], capture_output=True, text=True, check=False
+        )
+        if check.returncode != 0:
+            tmp.unlink()
+            raise SidecarError(f"Build attestation check failed:\n{check.stderr}")
+        print("Build attestation verified.")
+    else:
+        print(
+            f"Checksum verified. With a logged-in GitHub CLI, the build attestation is checked too (gh attestation verify --repo {REPO})."
+        )
+    tmp.replace(dest)
 
 
 def settings(ctx) -> dict[str, Any]:
@@ -132,7 +201,7 @@ class Client:
         return self._request("POST", "/calls", {"reason": reason, "details": details})
 
     def get_call(self, call_id: str) -> dict:
-        return self._request("GET", f"/calls/{call_id}")
+        return self._request("GET", f"/calls/{urllib.parse.quote(call_id, safe='')}")
 
     def recent_calls(self, limit: int = 5) -> list[dict]:
         return self._request("GET", f"/calls?limit={limit}").get("calls", [])
