@@ -1,4 +1,4 @@
-# hermes-whatsapp-voice
+# hermes-whatsapp-voice-stepfun
 
 Live voice calls with [Hermes](https://github.com/NousResearch/hermes-agent) over WhatsApp.
 
@@ -63,7 +63,7 @@ also load it as `hermes-whatsapp-voice:setup`.
 **Or by hand:**
 
 ```bash
-hermes plugins install 52eraja/hermes-whatsapp-voice --enable
+hermes plugins install 52eraja/hermes-whatsapp-voice-stepfun --enable
 ```
 
 ### 1. Set your number

@@ -1,7 +1,7 @@
 # Builds the sidecar from source for each platform on a version tag, attaches the binaries to the
 # GitHub release with SHA256SUMS, and records a GitHub build attestation for each binary, so
 # `hermes whatsapp-voice install` (and anyone else) can verify where a binary came from:
-#   gh attestation verify <binary> --repo 52eraja/hermes-whatsapp-voice
+#   gh attestation verify <binary> --repo 52eraja/hermes-whatsapp-voice-stepfun
 name: release
 
 on:

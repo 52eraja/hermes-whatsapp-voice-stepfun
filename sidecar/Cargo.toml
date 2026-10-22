@@ -5,7 +5,7 @@ edition = "2024"
 rust-version = "1.94"
 license = "MIT"
 description = "WhatsApp voice-call sidecar for Hermes: bridges linked-device calls to StepFun Realtime"
-repository = "https://github.com/52eraja/hermes-whatsapp-voice"
+repository = "https://github.com/52eraja/hermes-whatsapp-voice-stepfun"
 publish = false
 
 [dependencies]

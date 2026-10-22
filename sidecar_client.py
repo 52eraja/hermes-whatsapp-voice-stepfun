@@ -17,7 +17,7 @@ from typing import Any
 
 PLUGIN_NAME = "hermes-whatsapp-voice"
 BINARY_NAME = "hermes-wa-voice"
-REPO = "52eraja/hermes-whatsapp-voice"
+REPO = "52eraja/hermes-whatsapp-voice-stepfun"
 PLUGIN_DIR = Path(__file__).resolve().parent
 
 # Settings forwarded to the sidecar, with the defaults from plugin.yaml.

@@ -19,7 +19,7 @@ the chat: every secret is read from Hermes's own `.env`. Paths below assume the 
 (`~/.hermes`); if `HERMES_HOME` is set or a profile is active, use that home instead.
 
 Load this file in Hermes with `skill_view("hermes-whatsapp-voice:setup")`, or give its URL to any
-coding agent: https://github.com/52eraja/hermes-whatsapp-voice/blob/main/skills/setup/SKILL.md
+coding agent: https://github.com/52eraja/hermes-whatsapp-voice-stepfun/blob/main/skills/setup/SKILL.md
 
 ## 0. Check the prerequisites
 
@@ -39,7 +39,7 @@ grep -cE '^STEPFUN_API_KEY=' ~/.hermes/.env   # expect 1 or more
 ## 1. Install the plugin
 
 ```bash
-hermes plugins install 52eraja/hermes-whatsapp-voice --enable --yes-deps
+hermes plugins install 52eraja/hermes-whatsapp-voice-stepfun --enable --yes-deps
 ```
 
 Expect `Plugin hermes-whatsapp-voice enabled.` If `hermes plugins list` already shows it, run

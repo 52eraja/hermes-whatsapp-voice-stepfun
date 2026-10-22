@@ -10,7 +10,7 @@ description: >-
   sidecar and StepFun StepAudio 3 Realtime speech-to-speech.
 author: Ashwanth Balakrishnan
 license: MIT
-homepage: https://github.com/52eraja/hermes-whatsapp-voice
+homepage: https://github.com/52eraja/hermes-whatsapp-voice-stepfun
 tags: [whatsapp, voice, calls, stepfun-realtime]
 platforms: [linux, macos]
 requires_hermes: ">=0.21.5"
