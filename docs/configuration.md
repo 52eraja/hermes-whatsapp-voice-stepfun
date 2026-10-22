@@ -14,24 +14,27 @@ Restart the sidecar after a change: the dashboard's **Restart sidecar** button, 
 | key | default | |
 |---|---|---|
 | `owner_number` | (required) | Your number, international format |
-| `voice_model` | `gemini-3.8-live` | Gemini Live model |
-| `voice` | `Kore` | Gemini prebuilt voice |
+| `voice_model` | `stepaudio-3-realtime-preview` | StepFun Realtime model |
+| `voice` | `jingdiannvsheng` | StepFun voice ID |
 | `assistant_name` | `Hermes` | Fallback name when Hermes gives no persona briefing |
-| `languages` | (empty) | Language codes the voice may speak and listen for, e.g. `en-US, ta-IN`; empty allows any |
+| `languages` | (empty) | Language codes the voice should speak, e.g. `en-US, ta-IN`; empty allows any |
 | `voice_instructions` | (empty) | Your own extra rules for the voice: language, tone, call length |
-| `live_config` | `{}` | Advanced: any Gemini Live setup field, merged over the defaults (see below) |
+| `realtime_config` | `{}` | Advanced: any Realtime session field, merged over the defaults (see below) |
 | `ring_timeout_seconds` | `45` | How long an outbound call rings |
-| `max_call_minutes` | `15` | Hard cap per call |
+| `max_call_minutes` | `15` | Hard cap per call (StepFun sessions are capped at 30 minutes) |
 | `silence_hangup_seconds` | `180` | End a call when nobody has spoken for this long (e.g. left on hold) |
 | `answer_inbound` | `true` | Answer calls from `owner_number` |
 | `send_summary` | `true` | Message a summary after each call |
 | `listen` | `127.0.0.1:8796` | Sidecar API address (loopback) |
 | `hermes_api_url` | `http://127.0.0.1:8642` | Hermes API server |
 
-**Every Gemini Live option.** `live_config` takes any field of the Live API's setup message and
-merges it over the plugin's defaults. Objects merge key by key. `tools` is appended to the
-plugin's own tools rather than replacing them. For example, to change the voice and temperature, and
-let the caller pause longer:
+`languages` has no direct StepFun equivalent: the sidecar adds it to the session instructions and
+StepFun's ASR detects the caller's language automatically.
+
+**Every StepFun Realtime option.** `realtime_config` takes any field of the Realtime session
+(`session.update`) message and merges it over the plugin's defaults. Objects merge key by key.
+`tools` is appended to the plugin's own tools rather than replacing them. For example, to make the
+server VAD wait longer before deciding the caller finished, and to pick another voice:
 
 ```yaml
 # ~/.hermes/config.yaml
@@ -39,26 +42,29 @@ plugins:
   entries:
     hermes-whatsapp-voice:
       settings:
-        live_config:
-          generationConfig:
-            temperature: 0.6
-            speechConfig: {voiceConfig: {prebuiltVoiceConfig: {voiceName: Puck}}}
-          realtimeInputConfig:
-            automaticActivityDetection: {silenceDurationMs: 900, endOfSpeechSensitivity: END_SENSITIVITY_LOW}
+        realtime_config:
+          turn_detection:
+            silence_duration_ms: 900
+            energy_awakeness_threshold: 1800
+          voice: wenrounansheng
 ```
 
-For languages, prefer the `languages` setting. A `languageCodes` value inside `live_config` wins
-over it.
+The defaults are:
+- `modalities`: `["text", "audio"]` (fixed by StepFun);
+- `voice`: the `voice` setting;
+- `input_audio_format` / `output_audio_format`: `pcm16` (the sidecar resamples to/from 24 kHz);
+- `turn_detection`: `server_vad` with `prefix_padding_ms: 300`, `silence_duration_ms: 600`;
+- `tools`: `ask_hermes` and `end_call`.
 
-What each field does, and which ones a given model supports:
-[Live API reference (setup message)](https://ai.google.dev/api/live),
-[Live API capabilities guide](https://ai.google.dev/gemini-api/docs/live-guide),
-[session management](https://ai.google.dev/gemini-api/docs/live-session),
-[tool use](https://ai.google.dev/gemini-api/docs/live-tools),
-[best practices](https://ai.google.dev/gemini-api/docs/live-api/best-practices),
-[gemini-3.8-live model page](https://ai.google.dev/gemini-api/docs/models/gemini-3.8-live), and
-[voices](https://ai.google.dev/gemini-api/docs/speech-generation). There is no speaking-rate
-parameter. Ask for pace and tone in `voice_instructions` instead.
+The voice cannot be changed after a session's first audio response; the sidecar sets it once at
+session creation, so the configured value always applies. A session lasts at most 30 minutes.
+
+What each field does, and the full event list:
+[Realtime API reference](https://platform.stepfun.com/docs/zh/api-reference/realtime/chat),
+[realtime guide](https://platform.stepfun.com/docs/zh/guides/developer/realtime),
+[StepAudio 3 Realtime model page](https://platform.stepfun.com/docs/zh/guides/models/stepaudio-3-realtime),
+and the [official voice list](https://platform.stepfun.com/docs/zh/guides/developer/tts). There is no
+speaking-rate parameter. Ask for pace and tone in `voice_instructions` instead.
 
 **Personality.** The voice doesn't use a built-in persona. At startup and after each call, the
 sidecar asks your Hermes for a short briefing: its name, its personality, and what it knows about
@@ -72,10 +78,9 @@ hermes config set plugins.entries.hermes-whatsapp-voice.settings.voice_instructi
 
 ## Credentials
 
-The plugin never asks for its own keys. It reuses what Hermes already has:
-- **Gemini:** the key of Hermes's Gemini provider, `GOOGLE_API_KEY`, else `GEMINI_API_KEY`, from
-  Hermes's `.env` (`~/.hermes/.env` by default). Add one with `hermes model` (choose Gemini). Google login (Cloud Code OAuth)
-  doesn't work for the Live API.
+The plugin never asks for its own StepFun settings. It reads what Hermes already has:
+- **StepFun:** `STEPFUN_API_KEY` from Hermes's `.env` (`~/.hermes/.env` by default) or the Keys
+  page. Create one at https://platform.stepfun.com/.
 - **Hermes API server:** `API_SERVER_KEY` from Hermes's `.env`. Without it, calls still work but
   the voice can't hand tasks to Hermes, and summaries are raw transcripts.
 

@@ -12,7 +12,7 @@ pub struct Config {
     pub owner: String,
     pub listen: String,
     pub token: String,
-    pub gemini_api_key: String,
+    pub stepfun_api_key: String,
     pub model: String,
     pub voice: String,
     pub assistant_name: String,
@@ -20,8 +20,8 @@ pub struct Config {
     pub voice_instructions: String,
     /// Language codes (e.g. en-US) the voice may use; empty means any.
     pub languages: Vec<String>,
-    /// Raw Gemini Live setup fields (JSON object) merged over the defaults.
-    pub live_config: serde_json::Value,
+    /// Raw StepFun Realtime session fields (JSON object) merged over the defaults.
+    pub realtime_config: serde_json::Value,
     pub hermes_api_url: String,
     /// Empty disables ask_hermes.
     pub hermes_api_key: String,
@@ -68,11 +68,11 @@ pub fn parse_duration(s: &str) -> Result<Duration> {
     Ok(Duration::from_secs(secs))
 }
 
-fn live_config(raw: &str) -> Result<serde_json::Value> {
+fn realtime_config(raw: &str) -> Result<serde_json::Value> {
     let value: serde_json::Value =
-        serde_json::from_str(raw).context("live_config is not valid JSON")?;
+        serde_json::from_str(raw).context("realtime_config is not valid JSON")?;
     if !value.is_object() {
-        bail!("live_config must be a JSON object of Gemini Live setup fields");
+        bail!("realtime_config must be a JSON object of StepFun Realtime session fields");
     }
     Ok(value)
 }
@@ -104,9 +104,9 @@ impl Config {
             owner,
             listen,
             token: required("HWV_TOKEN")?,
-            gemini_api_key: required("GEMINI_API_KEY")?,
-            model: var("HWV_MODEL", "gemini-3.8-live"),
-            voice: var("HWV_VOICE", "Kore"),
+            stepfun_api_key: required("STEPFUN_API_KEY")?,
+            model: var("HWV_MODEL", "stepaudio-3-realtime-preview"),
+            voice: var("HWV_VOICE", "jingdiannvsheng"),
             assistant_name: var("HWV_ASSISTANT_NAME", "Hermes"),
             voice_instructions: var("HWV_VOICE_INSTRUCTIONS", ""),
             languages: var("HWV_LANGUAGES", "")
@@ -114,7 +114,7 @@ impl Config {
                 .map(|l| l.trim().to_string())
                 .filter(|l| !l.is_empty())
                 .collect(),
-            live_config: live_config(&var("HWV_LIVE_CONFIG", "{}"))?,
+            realtime_config: realtime_config(&var("HWV_REALTIME_CONFIG", "{}"))?,
             hermes_api_url: var("HERMES_API_URL", "http://127.0.0.1:8642")
                 .trim_end_matches('/')
                 .to_string(),
@@ -147,10 +147,10 @@ mod tests {
     }
 
     #[test]
-    fn live_config_must_be_an_object() {
-        assert_eq!(live_config("{}").unwrap(), serde_json::json!({}));
-        assert!(live_config("[1]").is_err());
-        assert!(live_config("{bad").is_err());
+    fn realtime_config_must_be_an_object() {
+        assert_eq!(realtime_config("{}").unwrap(), serde_json::json!({}));
+        assert!(realtime_config("[1]").is_err());
+        assert!(realtime_config("{bad").is_err());
     }
 
     #[test]

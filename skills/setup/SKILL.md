@@ -19,31 +19,41 @@ the chat: every secret is read from Hermes's own `.env`. Paths below assume the 
 (`~/.hermes`); if `HERMES_HOME` is set or a profile is active, use that home instead.
 
 Load this file in Hermes with `skill_view("hermes-whatsapp-voice:setup")`, or give its URL to any
-coding agent: https://github.com/ashwanthbalakrishnan5/hermes-whatsapp-voice/blob/main/skills/setup/SKILL.md
+coding agent: https://github.com/52eraja/hermes-whatsapp-voice/blob/main/skills/setup/SKILL.md
 
 ## 0. Check the prerequisites
 
 ```bash
 hermes --version                     # expect 0.21.5 or newer
 grep -E '^WHATSAPP_MODE=' ~/.hermes/.env
-grep -cE '^(GOOGLE_API_KEY|GEMINI_API_KEY)=' ~/.hermes/.env   # expect 1 or more
+grep -cE '^STEPFUN_API_KEY=' ~/.hermes/.env   # expect 1 or more
 ```
 
 - Unless the output is `WHATSAPP_MODE=bot`, stop. A missing line means self-chat mode. **Tell the
   owner** that voice calls need a separate bot number (Hermes WhatsApp `bot` mode), because nobody
   can call their own number.
-- If the Gemini count is 0: **Ask** the owner to add a Gemini API key to Hermes with `hermes model`
-  (choose Gemini) or to `~/.hermes/.env` as `GOOGLE_API_KEY=...`. Keys come from
-  https://aistudio.google.com/apikey. Wait until the count is 1 or more.
+- If the StepFun count is 0: **Ask** the owner to add a StepFun API key to Hermes's Keys page or to
+  `~/.hermes/.env` as `STEPFUN_API_KEY=...`. Keys come from https://platform.stepfun.com/. Wait
+  until the count is 1 or more.
 
 ## 1. Install the plugin
 
 ```bash
-hermes plugins install ashwanthbalakrishnan5/hermes-whatsapp-voice --enable --yes-deps
+hermes plugins install 52eraja/hermes-whatsapp-voice --enable --yes-deps
 ```
 
 Expect `Plugin hermes-whatsapp-voice enabled.` If `hermes plugins list` already shows it, run
 `hermes plugins update hermes-whatsapp-voice` instead.
+
+This StepFun build has no prebuilt release binaries yet, so build the sidecar once. It needs Rust
+1.94+, cmake and a C compiler:
+
+```bash
+hermes whatsapp-voice install --from-source
+```
+
+If `cargo --version` fails, stop and **tell** the owner to install Rust (https://rustup.rs) plus
+cmake and a C compiler on the Hermes machine.
 
 ## 2. Set the owner's number
 
@@ -89,8 +99,7 @@ device. **Ask** the owner to have the bot's phone in hand, then use one of:
   number instead. They must confirm on the phone promptly; if it fails with `hmac-mismatch`, use a
   QR instead.
 
-The first run downloads the sidecar binary (checksum-verified). Linking is done when the output
-says `Linked.` or the dashboard shows **Linked**.
+Linking is done when the output says `Linked.` or the dashboard shows **Linked**.
 
 ## 5. Keep the sidecar running
 
@@ -128,7 +137,9 @@ plugin settings, or `hermes config set plugins.entries.hermes-whatsapp-voice.set
 - `languages`: language codes the voice may speak and listen for, for example `en-US, ta-IN`.
 - `voice`, `voice_model`, `assistant_name`, `ring_timeout_seconds`, `max_call_minutes`,
   `answer_inbound`, `send_summary`.
-- `live_config`: any Gemini Live setup field (https://ai.google.dev/api/live).
+- `realtime_config`: any StepFun Realtime session field
+  (https://platform.stepfun.com/docs/zh/api-reference/realtime/chat), e.g. VAD timing or a
+  different voice.
 
 Saving in the dashboard applies changes. After `hermes config set`, restart the sidecar:
 `systemctl --user restart hermes-whatsapp-voice` (Linux) or
@@ -138,7 +149,8 @@ Saving in the dashboard applies changes. After `hermes config set`, restart the 
 
 | Symptom | Fix |
 |---|---|
-| `No Gemini API key found` | Step 0: add a Gemini key to Hermes. |
+| `No StepFun API key found` | Step 0: add `STEPFUN_API_KEY` to Hermes. |
+| `StepFun rejected the session` | The key is invalid, has no Realtime access, or `voice`/`voice_model` is wrong. Check the key and `realtime_config`. |
 | `sidecar not reachable` | The service isn't running: `systemctl --user status hermes-whatsapp-voice` (Linux) or `launchctl list | grep whatsapp-voice` (macOS). |
 | Service exits with `not linked to WhatsApp yet` | Step 4, then start the service again. |
 | Calls connect but the voice can't do things | `hermes_connected` is false: step 3. |

@@ -21,7 +21,7 @@
     { title: "Voice", keys: ["voice_model", "voice", "assistant_name", "languages", "voice_instructions"] },
     { title: "Calls", keys: ["ring_timeout_seconds", "max_call_minutes", "silence_hangup_seconds", "answer_inbound", "send_summary"] },
   ];
-  const WIDE = ["voice_instructions", "live_config"];
+  const WIDE = ["voice_instructions", "realtime_config"];
 
   function Card(props, ...children) {
     return h(
@@ -37,7 +37,7 @@
   function readiness(status) {
     const s = status.sidecar;
     return [
-      { key: "gemini", ok: status.gemini_key, label: "Gemini key", hint: "Add a Gemini API key to Hermes (Keys page, GOOGLE_API_KEY). The plugin reuses it." },
+      { key: "stepfun", ok: status.stepfun_key, label: "StepFun key", hint: "Add STEPFUN_API_KEY to Hermes (Keys page). The plugin reuses it." },
       { key: "owner", ok: !!status.owner_number, label: "Your number", hint: "Set your WhatsApp number in Settings below." },
       { key: "hermes", ok: status.hermes_api_key, label: "Hermes API", hint: "Set API_SERVER_ENABLED=true and an API_SERVER_KEY (Keys page), then restart the gateway." },
       { key: "linked", ok: !!(s && s.logged_in) || status.pairing === "linked", label: "WhatsApp linked", hint: "Link the bot's WhatsApp number once." },

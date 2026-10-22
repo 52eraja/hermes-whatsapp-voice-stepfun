@@ -1,7 +1,8 @@
-//! Audio plumbing between a WhatsApp call and Gemini Live.
+//! Audio plumbing between a WhatsApp call and StepFun Realtime.
 //!
 //! Call audio (whatsapp-rust) is 16 kHz mono i16: we push 960-sample (60 ms) frames and receive
-//! 320-sample (20 ms) frames. Gemini Live takes 16 kHz s16le and returns 24 kHz s16le.
+//! 320-sample (20 ms) frames. StepFun takes and returns 24 kHz s16le, so the microphone is
+//! upsampled and the model's speech is downsampled.
 
 use std::collections::VecDeque;
 use std::sync::Mutex;
@@ -88,6 +89,72 @@ impl Downsampler {
     }
 }
 
+/// Streaming 16 kHz -> 24 kHz converter with a windowed-sinc low-pass.
+///
+/// Output sample n sits at input position (2/3)n, so there are three filter phases (0, 1/3, 2/3),
+/// all precomputed. The low-pass removes the imaging above the input's 8 kHz Nyquist.
+pub struct Upsampler {
+    buf: Vec<f32>,
+    pos: f64, // input index of the next output sample, relative to buf
+    phases: [[f32; 2 * HALF_TAPS]; 3],
+}
+
+impl Upsampler {
+    pub fn new() -> Self {
+        let cutoff = 7400.0 / 24000.0;
+        let mut phases = [[0f32; 2 * HALF_TAPS]; 3];
+        for (phase, frac) in [0.0f64, 1.0 / 3.0, 2.0 / 3.0].into_iter().enumerate() {
+            let mut w = [0f64; 2 * HALF_TAPS];
+            for (k, wk) in w.iter_mut().enumerate() {
+                let x = (k as f64 - HALF_TAPS as f64 + 1.0) - frac;
+                let sinc = if x == 0.0 {
+                    2.0 * cutoff
+                } else {
+                    (2.0 * std::f64::consts::PI * cutoff * x).sin() / (std::f64::consts::PI * x)
+                };
+                let hann = 0.5 + 0.5 * (std::f64::consts::PI * x / HALF_TAPS as f64).cos();
+                *wk = sinc * hann;
+            }
+            let sum: f64 = w.iter().sum();
+            for (tap, wk) in phases[phase].iter_mut().zip(w) {
+                *tap = (wk / sum) as f32;
+            }
+        }
+        Self {
+            buf: vec![0.0; HALF_TAPS],
+            pos: HALF_TAPS as f64,
+            phases,
+        }
+    }
+
+    pub fn process(&mut self, input: &[i16]) -> Vec<i16> {
+        self.buf.extend(input.iter().map(|&s| s as f32));
+        let mut out = Vec::with_capacity(input.len() * 3 / 2 + 1);
+        loop {
+            let base = self.pos as usize;
+            if base + HALF_TAPS >= self.buf.len() {
+                break;
+            }
+            let phase = ((self.pos.fract() * 3.0).round() as usize) % 3;
+            let taps = &self.phases[phase];
+            let start = base + 1 - HALF_TAPS;
+            let acc: f32 = self.buf[start..start + 2 * HALF_TAPS]
+                .iter()
+                .zip(taps)
+                .map(|(x, h)| x * h)
+                .sum();
+            out.push(acc.round().clamp(i16::MIN as f32, i16::MAX as f32) as i16);
+            self.pos += 2.0 / 3.0;
+        }
+        let drop = (self.pos as usize).saturating_sub(HALF_TAPS);
+        if drop > 0 {
+            self.buf.drain(..drop);
+            self.pos -= drop as f64;
+        }
+        out
+    }
+}
+
 /// Model speech waiting to be played into the call, drained one 60 ms frame per tick.
 #[derive(Default)]
 pub struct Playout {
@@ -155,6 +222,21 @@ mod tests {
         let stop = Downsampler::new().process(&sine(11000.0, 24000.0, 24000));
         let r = rms(&stop[1000..]);
         assert!(r < 400.0, "11 kHz leaked with rms {r}");
+    }
+
+    #[test]
+    fn upsampler_ratio_across_uneven_chunks() {
+        let mut u = Upsampler::new();
+        let input = sine(440.0, 16000.0, 16000);
+        let out: Vec<i16> = input.chunks(731).flat_map(|c| u.process(c)).collect();
+        assert!((23960..=24000).contains(&out.len()), "got {}", out.len());
+    }
+
+    #[test]
+    fn upsampler_keeps_passband() {
+        let out = Upsampler::new().process(&sine(1000.0, 16000.0, 16000));
+        let r = rms(&out[1000..]);
+        assert!((10900.0..12300.0).contains(&r), "1 kHz rms {r}");
     }
 
     #[test]

@@ -59,7 +59,7 @@ def status():
     settings = sc.settings(_SettingsCtx())
     out = {
         "owner_number": str(settings["owner_number"] or ""),
-        "gemini_key": bool(sc.gemini_key()),
+        "stepfun_key": bool(sc.stepfun_key()),
         "hermes_api_key": bool(_secret("API_SERVER_KEY")),
         "installed": sc.binary_path().exists(),
         "sidecar": None,

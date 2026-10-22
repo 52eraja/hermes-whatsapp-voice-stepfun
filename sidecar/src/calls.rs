@@ -1,5 +1,5 @@
-//! Call records and the conversation bridge: WhatsApp call audio <-> Gemini Live, with Hermes as
-//! the voice agent's tool.
+//! Call records and the conversation bridge: WhatsApp call audio <-> StepFun Realtime, with Hermes
+//! as the voice agent's tool.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
@@ -16,16 +16,14 @@ use whatsapp_rust::prelude::*;
 use whatsapp_rust::voip::{CallHandle, CallTermination};
 use whatsapp_rust::wacore::types::call::IncomingCall;
 
-use crate::audio::{Downsampler, Playout};
+use crate::audio::{Downsampler, Playout, Upsampler};
 use crate::config::Config;
-use crate::gemini::{Live, LiveEvent, Setup};
 use crate::hermes::Hermes;
+use crate::stepfun::{Live, LiveEvent, Setup};
 
 const KEEP_RECORDS: usize = 50;
 const FRAME_INTERVAL: Duration = Duration::from_millis(60);
 const HERMES_TIMEOUT: Duration = Duration::from_secs(180);
-const STILL_CONNECTED: &str = "(The call is still connected: the owner spoke after your goodbye. \
-    Answer them, and call end_call again once they are done.)";
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -522,7 +520,6 @@ impl Bridge {
         let mut functions = vec![json!({
             "name": "end_call",
             "description": "Hang up the call. Call it only after you have said goodbye.",
-            "behavior": "NON_BLOCKING",
         })];
         if self.hermes.is_some() {
             functions.push(json!({
@@ -538,7 +535,6 @@ impl Bridge {
                     }},
                     "required": ["request"],
                 },
-                "behavior": "NON_BLOCKING",
             }));
         }
         Setup {
@@ -546,8 +542,7 @@ impl Bridge {
             voice: self.cfg.voice.clone(),
             system_instruction,
             functions,
-            languages: self.cfg.languages.clone(),
-            overrides: self.cfg.live_config.clone(),
+            overrides: self.cfg.realtime_config.clone(),
         }
     }
 
@@ -594,7 +589,7 @@ impl Bridge {
             r.status = Status::InProgress;
             r.answered_at = Some(now());
         });
-        let mut live = match Live::connect(&self.cfg.gemini_api_key, self.setup(context)).await {
+        let mut live = match Live::connect(&self.cfg.stepfun_api_key, self.setup(context)).await {
             Ok(l) => l,
             Err(e) => {
                 log::error!("call {id}: voice model unavailable: {e:#}");
@@ -625,6 +620,7 @@ impl Bridge {
         });
 
         let mut down = Downsampler::new();
+        let mut up = Upsampler::new();
         let (tool_tx, mut tool_rx) = mpsc::unbounded_channel::<(String, Value)>();
         let mut tool_tasks: HashMap<String, JoinHandle<()>> = HashMap::new();
         let mut ending = Ending::new(self.cfg.silence_timeout);
@@ -642,7 +638,7 @@ impl Bridge {
                 }
                 _ = &mut max_duration => break "maximum call length reached".to_string(),
                 frame = spk_rx.recv() => match frame {
-                    Ok(f) => live.send_audio(&f),
+                    Ok(f) => live.send_audio(&up.process(&f)),
                     Err(_) => {
                         peer_ended = true;
                         break "call audio closed".to_string();
@@ -650,7 +646,7 @@ impl Bridge {
                 },
                 Some((tool_id, result)) = tool_rx.recv() => {
                     tool_tasks.remove(&tool_id);
-                    live.send_tool_response(&tool_id, "ask_hermes", result, "WHEN_IDLE");
+                    live.send_tool_response(&tool_id, result, "WHEN_IDLE");
                 }
                 _ = check.tick() => {
                     if let Some(why) = ending.check(Instant::now(), playout.buffered() > 0, !tool_tasks.is_empty()) {
@@ -661,14 +657,10 @@ impl Bridge {
                     Some(LiveEvent::Audio(pcm)) => playout.push(&down.process(&pcm)),
                     Some(LiveEvent::Interrupted) => {
                         playout.clear();
-                        if ending.owner_spoke(Instant::now()) {
-                            live.send_text(STILL_CONNECTED);
-                        }
+                        ending.owner_spoke(Instant::now());
                     }
                     Some(LiveEvent::InputTranscript(t)) => {
-                        if ending.owner_spoke(Instant::now()) {
-                            live.send_text(STILL_CONNECTED);
-                        }
+                        ending.owner_spoke(Instant::now());
                         self.calls.update(id, |r| r.append("owner", &t));
                     }
                     Some(LiveEvent::OutputTranscript(t)) => self.calls.update(id, |r| r.append("assistant", &t)),
@@ -681,14 +673,14 @@ impl Bridge {
                         "end_call" => {
                             // The model sometimes asks a question and hangs up in the same turn.
                             if self.calls.get(id).is_some_and(|r| r.ends_with_question()) {
-                                live.send_tool_response(&tool_id, &name, json!({"error":
+                                live.send_tool_response(&tool_id, json!({"error":
                                     "You just asked the owner a question. Wait for their answer, and end the call only after they say bye."}), "SILENT");
                             } else {
-                                live.send_tool_response(&tool_id, &name, json!({"ok": true}), "SILENT");
+                                live.send_tool_response(&tool_id, json!({"ok": true}), "SILENT");
                                 ending.request();
                             }
                         }
-                        _ => live.send_tool_response(&tool_id, &name, json!({"error": "unknown function"}), "WHEN_IDLE"),
+                        _ => live.send_tool_response(&tool_id, json!({"error": "unknown function"}), "WHEN_IDLE"),
                     },
                     Some(LiveEvent::ToolCancelled(ids)) => {
                         for tool_id in ids {

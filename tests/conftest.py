@@ -16,7 +16,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
 RESERVED_SETTING_ROOTS = {"model", "plugins", "security", "settings"}
-SECRETS = {"GEMINI_API_KEY": "gemini-test", "API_SERVER_KEY": "hermes-test"}
+SECRETS = {"STEPFUN_API_KEY": "stepfun-test", "API_SERVER_KEY": "hermes-test"}
 
 
 def _stub_hermes_modules(data_root: Path) -> None:

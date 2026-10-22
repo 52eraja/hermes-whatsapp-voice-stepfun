@@ -17,18 +17,18 @@ from typing import Any
 
 PLUGIN_NAME = "hermes-whatsapp-voice"
 BINARY_NAME = "hermes-wa-voice"
-REPO = "ashwanthbalakrishnan5/hermes-whatsapp-voice"
+REPO = "52eraja/hermes-whatsapp-voice"
 PLUGIN_DIR = Path(__file__).resolve().parent
 
 # Settings forwarded to the sidecar, with the defaults from plugin.yaml.
 SETTINGS: dict[str, Any] = {
     "owner_number": "",
-    "voice_model": "gemini-3.8-live",
-    "voice": "Kore",
+    "voice_model": "stepaudio-3-realtime-preview",
+    "voice": "jingdiannvsheng",
     "assistant_name": "Hermes",
     "languages": "",
     "voice_instructions": "",
-    "live_config": {},
+    "realtime_config": {},
     "listen": "127.0.0.1:8796",
     "hermes_api_url": "http://127.0.0.1:8642",
     "ring_timeout_seconds": 45,
@@ -103,8 +103,14 @@ def download_release(dest: Path) -> None:
     if asset not in sums:
         raise SidecarError(f"No pinned checksum for {asset}; build it with --from-source.")
     print(f"Downloading {asset} from the {tag} release of {REPO} ...")
-    with urllib.request.urlopen(f"https://github.com/{REPO}/releases/download/{tag}/{asset}", timeout=120) as resp:
-        blob = resp.read()
+    try:
+        with urllib.request.urlopen(f"https://github.com/{REPO}/releases/download/{tag}/{asset}", timeout=120) as resp:
+            blob = resp.read()
+    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as e:
+        raise SidecarError(
+            f"Could not download the {tag} release ({e}); build the sidecar with "
+            "`hermes whatsapp-voice install --from-source`."
+        ) from e
     if hashlib.sha256(blob).hexdigest() != sums[asset]:
         raise SidecarError(f"Checksum mismatch for {asset}; refusing to install.")
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -131,11 +137,11 @@ def settings(ctx) -> dict[str, Any]:
     return {key: ctx.get_config(key, default=default) for key, default in SETTINGS.items()}
 
 
-def gemini_key() -> str:
-    """The Gemini key Hermes's own Gemini provider uses, in the same order (GOOGLE_API_KEY first)."""
+def stepfun_key() -> str:
+    """The StepFun API key Hermes has in its environment."""
     from agent.secret_scope import get_secret
 
-    return get_secret("GOOGLE_API_KEY") or get_secret("GEMINI_API_KEY") or ""
+    return get_secret("STEPFUN_API_KEY") or ""
 
 
 def sidecar_env(ctx) -> dict[str, str]:
@@ -150,7 +156,7 @@ def sidecar_env(ctx) -> dict[str, str]:
         "HWV_ASSISTANT_NAME": str(s["assistant_name"]),
         "HWV_LANGUAGES": str(s["languages"]),
         "HWV_VOICE_INSTRUCTIONS": str(s["voice_instructions"]),
-        "HWV_LIVE_CONFIG": json.dumps(s["live_config"] or {}),
+        "HWV_REALTIME_CONFIG": json.dumps(s["realtime_config"] or {}),
         "HWV_LISTEN": str(s["listen"]),
         "HWV_RING_TIMEOUT": f"{int(s['ring_timeout_seconds'])}s",
         "HWV_MAX_DURATION": f"{int(s['max_call_minutes'])}m",
@@ -160,7 +166,7 @@ def sidecar_env(ctx) -> dict[str, str]:
         "HWV_DATA_DIR": str(data_dir()),
         "HWV_TOKEN": token(create=True),
         "HERMES_API_URL": str(s["hermes_api_url"]),
-        "GEMINI_API_KEY": gemini_key(),
+        "STEPFUN_API_KEY": stepfun_key(),
         "HERMES_API_KEY": get_secret("API_SERVER_KEY") or "",
     }
     return env

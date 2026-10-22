@@ -1,27 +1,27 @@
 name: hermes-whatsapp-voice
 label: WhatsApp Voice Calls
 kind: standalone
-version: 0.1.12
+version: 0.2.0
 manifest_version: 2
 api_version: 1
 description: >-
   Live voice calls with Hermes over WhatsApp. Call your bot's number and talk to
   Hermes, or let Hermes call you for things that matter. Uses a linked-device
-  sidecar and Gemini Live speech-to-speech.
+  sidecar and StepFun StepAudio 3 Realtime speech-to-speech.
 author: Ashwanth Balakrishnan
 license: MIT
-homepage: https://github.com/ashwanthbalakrishnan5/hermes-whatsapp-voice
-tags: [whatsapp, voice, calls, gemini-live]
+homepage: https://github.com/52eraja/hermes-whatsapp-voice
+tags: [whatsapp, voice, calls, stepfun-realtime]
 platforms: [linux, macos]
 requires_hermes: ">=0.21.5"
 provides_tools:
   - whatsapp_call_owner
   - whatsapp_call_status
-# Gemini: reuses the key of Hermes's own Gemini provider (GOOGLE_API_KEY, else GEMINI_API_KEY).
+# StepFun: the key is read from Hermes's secrets and passed to the sidecar.
 optional_env:
-  - name: GOOGLE_API_KEY
-    description: "Gemini API key, shared with Hermes's Gemini provider (only needed if Hermes doesn't have one yet)"
-    url: "https://aistudio.google.com/apikey"
+  - name: STEPFUN_API_KEY
+    description: "StepFun API key for StepAudio 3 Realtime"
+    url: "https://platform.stepfun.com/"
     secret: true
   - name: API_SERVER_KEY
     description: "Hermes API server key; lets the voice agent hand real work to Hermes during a call"
@@ -35,14 +35,14 @@ config_schema:
     description: "International format, e.g. +15551234567. The only number called, and the only caller answered."
   voice_model:
     type: str
-    default: "gemini-3.8-live"
+    default: "stepaudio-3-realtime-preview"
     label: "Voice model"
-    description: "Gemini Live model ID."
+    description: "StepFun Realtime model ID."
   voice:
     type: str
-    default: "Kore"
+    default: "jingdiannvsheng"
     label: "Voice"
-    description: "Gemini prebuilt voice, e.g. Kore, Puck, Charon."
+    description: "StepFun voice ID, e.g. jingdiannvsheng, wenrounansheng, qingchunshaonv."
   assistant_name:
     type: str
     default: "Hermes"
@@ -67,7 +67,7 @@ config_schema:
     type: int
     default: 15
     label: "Longest call (minutes)"
-    description: "Calls end automatically after this."
+    description: "Calls end automatically after this. StepFun sessions are capped at 30 minutes."
   silence_hangup_seconds:
     type: int
     default: 180
@@ -83,11 +83,11 @@ config_schema:
     default: true
     label: "Send call summary"
     description: "Message a short WhatsApp summary after each call."
-  live_config:
+  realtime_config:
     type: dict
     default: {}
-    label: "Gemini Live overrides"
-    description: "Any Live API setup field, merged over the defaults. Reference: https://ai.google.dev/api/live"
+    label: "StepFun Realtime overrides"
+    description: "Any Realtime session field, merged over the defaults. Reference: https://platform.stepfun.com/docs/zh/api-reference/realtime/chat"
   listen:
     type: str
     default: "127.0.0.1:8796"

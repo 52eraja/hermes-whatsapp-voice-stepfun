@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import platform
 
 import pytest
 from conftest import FakeCtx, FakeSidecar
@@ -103,25 +104,25 @@ def test_sidecar_env(plugin):
     assert env["HWV_SEND_SUMMARY"] == "true"
     assert env["HWV_MAX_DURATION"] == "5m"
     assert env["HWV_RING_TIMEOUT"] == "45s"
-    assert env["HWV_LIVE_CONFIG"] == "{}"
+    assert env["HWV_REALTIME_CONFIG"] == "{}"
     assert env["HWV_LANGUAGES"] == ""
     assert env["HWV_SILENCE_TIMEOUT"] == "180s"
-    assert env["GEMINI_API_KEY"] == "gemini-test"
+    assert env["STEPFUN_API_KEY"] == "stepfun-test"
     assert env["HERMES_API_KEY"] == "hermes-test"
     # A token is minted once and reused.
     assert env["HWV_TOKEN"] == plugin.sidecar_client.sidecar_env(ctx)["HWV_TOKEN"]
     token_file = plugin.sidecar_client.data_dir() / "sidecar.token"
-    assert oct(token_file.stat().st_mode & 0o777) == "0o600"
+    if platform.system() != "Windows":
+        assert oct(token_file.stat().st_mode & 0o777) == "0o600"
 
 
-def test_gemini_key_follows_hermes_provider_order(plugin, monkeypatch):
+def test_stepfun_key_comes_from_hermes_secrets(plugin, monkeypatch):
     import conftest
 
-    monkeypatch.setitem(conftest.SECRETS, "GOOGLE_API_KEY", "google-test")
-    assert plugin.sidecar_client.gemini_key() == "google-test"
-    monkeypatch.delitem(conftest.SECRETS, "GOOGLE_API_KEY")
-    monkeypatch.delitem(conftest.SECRETS, "GEMINI_API_KEY")
-    assert plugin.sidecar_client.gemini_key() == ""
+    monkeypatch.setitem(conftest.SECRETS, "STEPFUN_API_KEY", "stepfun-other")
+    assert plugin.sidecar_client.stepfun_key() == "stepfun-other"
+    monkeypatch.delitem(conftest.SECRETS, "STEPFUN_API_KEY")
+    assert plugin.sidecar_client.stepfun_key() == ""
 
 
 def test_download_rejects_binary_not_matching_pinned_checksum(plugin, monkeypatch, tmp_path):
@@ -183,11 +184,13 @@ def test_dashboard_settings_reject_unknown_keys_and_wrong_types(plugin, monkeypa
             api.save_settings(bad)
     assert calls == [], "nothing is written when any value is rejected"
 
-    api.save_settings({"voice": "Puck", "ring_timeout_seconds": 30, "answer_inbound": False, "live_config": {"a": {}}})
+    api.save_settings(
+        {"voice": "wenrounansheng", "ring_timeout_seconds": 30, "answer_inbound": False, "realtime_config": {"a": {}}}
+    )
     prefix = "plugins.entries.hermes-whatsapp-voice.settings."
     assert calls == [
-        [prefix + "voice", "Puck"],
+        [prefix + "voice", "wenrounansheng"],
         [prefix + "ring_timeout_seconds", "30"],
         [prefix + "answer_inbound", "false"],
-        [prefix + "live_config", '{"a": {}}'],
+        [prefix + "realtime_config", '{"a": {}}'],
     ]

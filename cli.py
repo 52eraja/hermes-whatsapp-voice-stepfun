@@ -17,9 +17,9 @@ from .sidecar_client import (
     binary_path,
     data_dir,
     download_release,
-    gemini_key,
     settings,
     sidecar_env,
+    stepfun_key,
 )
 
 PLUGIN_DIR = Path(__file__).resolve().parent
@@ -61,11 +61,10 @@ def _require_ready(ctx) -> Path:
         raise SystemExit(
             "Set your number first: hermes config set plugins.entries.hermes-whatsapp-voice.settings.owner_number +15551234567"
         )
-    if not gemini_key():
+    if not stepfun_key():
         raise SystemExit(
-            "No Gemini API key found. This plugin reuses the key of Hermes's Gemini provider "
-            "(GOOGLE_API_KEY or GEMINI_API_KEY in ~/.hermes/.env). Add one with `hermes model` "
-            "(choose Gemini) or put it in ~/.hermes/.env."
+            "No StepFun API key found. Add STEPFUN_API_KEY to Hermes (Keys page, or "
+            "~/.hermes/.env). Create one at https://platform.stepfun.com/."
         )
     exe = binary_path()
     if not exe.exists():
