@@ -90,7 +90,7 @@ hermes whatsapp-voice pair --phone +15550001111   # the BOT's number; prints a p
 
 Prebuilt binaries are published with every release tag. The first `pair`/`serve`/`install` downloads
 one automatically, checksum-verified against `sidecar/release-checksums.txt` (and attested with the
-GitHub CLI when available). They cover linux amd64/arm64, macOS arm64 and Windows amd64/arm64.
+GitHub CLI when available). They cover linux amd64/arm64, macOS amd64/arm64 and Windows amd64/arm64.
 To build one from source instead:
 
 ```bash

@@ -34,6 +34,8 @@ jobs:
             asset: hermes-wa-voice_linux_arm64
           - runner: macos-latest
             asset: hermes-wa-voice_darwin_arm64
+          - runner: macos-15-intel
+            asset: hermes-wa-voice_darwin_amd64
           - runner: windows-latest
             asset: hermes-wa-voice_windows_amd64.exe
           - runner: windows-11-arm

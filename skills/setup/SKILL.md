@@ -45,8 +45,15 @@ hermes plugins install 52eraja/hermes-whatsapp-voice-stepfun --enable --yes-deps
 Expect `Plugin hermes-whatsapp-voice enabled.` If `hermes plugins list` already shows it, run
 `hermes plugins update hermes-whatsapp-voice` instead.
 
-This StepFun build has no prebuilt release binaries yet, so build the sidecar once. It needs Rust
-1.94+, cmake and a C compiler:
+Prebuilt sidecar binaries are published with every release tag, so `install` downloads one and
+checks it against the pinned checksums:
+
+```bash
+hermes whatsapp-voice install
+```
+
+If that fails (no binary for the platform, or no network), build the sidecar from source instead.
+It needs Rust 1.94+, cmake and a C compiler:
 
 ```bash
 hermes whatsapp-voice install --from-source
