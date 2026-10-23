@@ -1,9 +1,12 @@
 {
   "repo": "52eraja/hermes-whatsapp-voice-stepfun",
-  "tag": "v0.2.0",
+  "tag": "v0.3.0",
   "checksums": {
-    "hermes-wa-voice_darwin_arm64": "f5c3358bbd17842ff7531d3b365b62f549969795dc63603364e9f31616623abc",
-    "hermes-wa-voice_linux_amd64": "395b9358bdf0dd13967e7cbc5f90cceda38ab92a523ae37dc1f678fe656c983f",
-    "hermes-wa-voice_linux_arm64": "732122ca659f8a795a79ef0b3c9298af5e8521f4db13369dd0c1a7c85be40f30"
+    "hermes-wa-voice_darwin_amd64": "a2ca812aebfd4fbca97cd518c74e01138a234f2e6179f8ce5d7b2512448c1092",
+    "hermes-wa-voice_darwin_arm64": "30d5faa271e524c5c8e7c66bffdaa18c364cd3cba437fdff335522d88c0fe26b",
+    "hermes-wa-voice_linux_amd64": "19886ea11c7196510f8ce389b2c98fa4748ffbcf5a1e8594492acc1e1a9eac9c",
+    "hermes-wa-voice_linux_arm64": "00adfd5dff1002cb4d6a1844d92d564ff0acf968908903838f786714d6b07e92",
+    "hermes-wa-voice_windows_amd64.exe": "e3d4c639d146e48d1fb32e110b9b9a6e614f251538ceb5df57ee1a13cd59ff86",
+    "hermes-wa-voice_windows_arm64.exe": "abae3f74971917a49a8a4a96ba51a565467bc9d029a7d572c953de5cafccd457"
   }
 }
