@@ -31,6 +31,9 @@ openclaw plugins install npm:openclaw-whatsapp-voice-stepfun
 openclaw whatsapp-voice install     # downloads and verifies the sidecar binary
 ```
 
+Prebuilt binaries cover Linux, macOS and Windows on amd64 and arm64. `install --from-source` builds
+the sidecar from `../sidecar` instead.
+
 Then set your number and pair the bot's WhatsApp number — the full runbook is in the bundled skill
 `whatsapp-voice-stepfun`, and `openclaw whatsapp-voice --help` lists the commands:
 
