@@ -96,4 +96,4 @@ The sidecar sources live in `../sidecar` in this repository; `openclaw whatsapp-
 
 ## License
 
-MIT. See [LICENSE](../LICENSE).
+MIT. See [LICENSE](LICENSE).

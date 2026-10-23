@@ -88,15 +88,14 @@ hermes whatsapp-voice pair                        # shows a QR code
 hermes whatsapp-voice pair --phone +15550001111   # the BOT's number; prints a pair code
 ```
 
-This StepFun version has no prebuilt release binaries yet, so build the sidecar once:
+Prebuilt binaries are published with every release tag. The first `pair`/`serve`/`install` downloads
+one automatically, checksum-verified against `sidecar/release-checksums.txt` (and attested with the
+GitHub CLI when available). They cover linux amd64/arm64, macOS arm64 and Windows amd64/arm64.
+To build one from source instead:
 
 ```bash
 hermes whatsapp-voice install --from-source   # needs Rust 1.94+, cmake and a C compiler
 ```
-
-Once release binaries exist for this fork, the first `pair`/`serve` downloads one automatically,
-checksum-verified against `sidecar/release-checksums.txt` (and attested with the GitHub CLI when
-available). Prebuilt binaries would cover linux amd64/arm64 and macOS arm64.
 
 > **Why a separate link when Hermes is already logged in to WhatsApp?** WhatsApp lets each linked
 > device keep only one live connection. Sharing Hermes's WhatsApp session would make the two
