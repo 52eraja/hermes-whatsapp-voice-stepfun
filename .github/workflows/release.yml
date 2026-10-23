@@ -34,15 +34,24 @@ jobs:
             asset: hermes-wa-voice_linux_arm64
           - runner: macos-latest
             asset: hermes-wa-voice_darwin_arm64
+          - runner: windows-latest
+            asset: hermes-wa-voice_windows_amd64.exe
+          - runner: windows-11-arm
+            asset: hermes-wa-voice_windows_arm64.exe
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: Build
         working-directory: sidecar
+        shell: bash
         run: |
           cargo build --release --locked
-          cp target/release/hermes-wa-voice "../${{ matrix.asset }}"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cp target/release/hermes-wa-voice.exe "../${{ matrix.asset }}"
+          else
+            cp target/release/hermes-wa-voice "../${{ matrix.asset }}"
+          fi
       # Attestation talks to Sigstore's public log, which times out now and then: retry once.
       - id: attest
         uses: actions/attest-build-provenance@v2
