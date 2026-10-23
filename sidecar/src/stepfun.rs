@@ -148,8 +148,9 @@ impl Parser {
                     self.cancel_sent = true;
                     p.cancel = true;
                     if !self.pending_tools.is_empty() {
-                        p.events
-                            .push(LiveEvent::ToolCancelled(self.pending_tools.drain().collect()));
+                        p.events.push(LiveEvent::ToolCancelled(
+                            self.pending_tools.drain().collect(),
+                        ));
                     }
                 }
             }
@@ -196,7 +197,8 @@ impl Parser {
                     }
                     let even = bytes.len() - bytes.len() % 2;
                     if even > 0 {
-                        p.events.push(LiveEvent::Audio(le_bytes_to_i16(&bytes[..even])));
+                        p.events
+                            .push(LiveEvent::Audio(le_bytes_to_i16(&bytes[..even])));
                     }
                     self.audio_leftover = bytes[even..].to_vec();
                 }
@@ -220,7 +222,8 @@ impl Parser {
                 if item["type"].as_str() == Some("function_call") {
                     let id = item["call_id"].as_str().unwrap_or_default();
                     let name = item["name"].as_str().unwrap_or_default();
-                    if !id.is_empty() && !name.is_empty() && self.seen_calls.insert(id.to_string()) {
+                    if !id.is_empty() && !name.is_empty() && self.seen_calls.insert(id.to_string())
+                    {
                         self.pending_tools.insert(id.to_string());
                         p.events.push(LiveEvent::ToolCall {
                             id: id.to_string(),
@@ -341,8 +344,7 @@ async fn open(api_key: &str, setup: &Setup) -> Result<Ws> {
     .await
     .context("timed out connecting to StepFun Realtime")?
     .context("connecting to StepFun Realtime")?;
-    ws.send(Message::text(setup.session().to_string()))
-        .await?;
+    ws.send(Message::text(setup.session().to_string())).await?;
     let ready = async {
         while let Some(frame) = ws.next().await {
             let value = match frame? {
@@ -611,7 +613,10 @@ mod tests {
 
     #[test]
     fn escapes_the_model_in_the_query() {
-        assert_eq!(query_escape("stepaudio-3-realtime-preview"), "stepaudio-3-realtime-preview");
+        assert_eq!(
+            query_escape("stepaudio-3-realtime-preview"),
+            "stepaudio-3-realtime-preview"
+        );
         assert_eq!(query_escape("a b&c"), "a%20b%26c");
     }
 

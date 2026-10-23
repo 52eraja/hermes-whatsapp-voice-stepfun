@@ -9,8 +9,8 @@ mod audio;
 mod calls;
 mod config;
 mod hermes;
-mod stepfun;
 mod server;
+mod stepfun;
 
 use std::sync::Arc;
 use std::time::Duration;
