@@ -97,6 +97,10 @@ npm run plugin:validate
 The sidecar sources live in `../sidecar` in this repository; `openclaw whatsapp-voice install
 --from-source` builds them from there.
 
+The OpenClaw CLI replaces the plugin's own copy of `openclaw` with a link to the host it runs in.
+When that host is this checkout, the link points at itself and the dev dependency breaks; run
+`npm install` again to restore it.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
