@@ -15,5 +15,9 @@ sidecar/target/
 *.db-wal
 .DS_Store
 
+openclaw/node_modules/
+openclaw/dist/
+openclaw/*.tgz
+
 # Draft of the Hermes catalog submission (lives in NousResearch/hermes-agent, not here)
 catalog-pr/

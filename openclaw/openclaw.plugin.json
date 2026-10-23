@@ -1,0 +1,174 @@
+{
+  "id": "whatsapp-voice-stepfun",
+  "categories": [
+    "voice"
+  ],
+  "name": "WhatsApp Voice (StepFun)",
+  "description": "Place WhatsApp voice calls to the owner with StepFun StepAudio 3 Realtime, and read call transcripts.",
+  "version": "0.3.0",
+  "cliCommands": [
+    {
+      "name": "whatsapp-voice",
+      "description": "WhatsApp voice calls: install, pair and run the sidecar",
+      "hasSubcommands": true
+    }
+  ],
+  "activation": {
+    "onStartup": true,
+    "onCommands": [
+      "whatsapp-voice"
+    ]
+  },
+  "skills": [
+    "./skills"
+  ],
+  "configGroups": [
+    {
+      "id": "whatsapp",
+      "title": "WhatsApp",
+      "order": 10,
+      "properties": [
+        "ownerNumber",
+        "answerInbound",
+        "sendSummary"
+      ]
+    },
+    {
+      "id": "voice",
+      "title": "Voice",
+      "order": 20,
+      "properties": [
+        "voiceModel",
+        "voice",
+        "assistantName",
+        "languages",
+        "voiceInstructions",
+        "ringTimeoutSeconds",
+        "maxCallMinutes",
+        "silenceHangupSeconds",
+        "realtimeConfig"
+      ]
+    },
+    {
+      "id": "runtime",
+      "title": "Sidecar",
+      "order": 30,
+      "properties": [
+        "stepfunApiKey",
+        "agentId",
+        "autoStart",
+        "listen",
+        "consultListen"
+      ]
+    }
+  ],
+  "uiHints": {
+    "ownerNumber": {
+      "label": "Owner number",
+      "help": "Your WhatsApp number in international format. The only number called, and the only caller answered."
+    },
+    "stepfunApiKey": {
+      "label": "StepFun API key",
+      "help": "StepFun key for StepAudio 3 Realtime. Falls back to the STEPFUN_API_KEY environment variable.",
+      "sensitive": true
+    },
+    "agentId": {
+      "label": "Agent",
+      "help": "Which OpenClaw agent the voice consults during a call. Empty: the default agent."
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "ownerNumber": {
+        "type": "string",
+        "description": "Your WhatsApp number in international format, e.g. +15551234567. The only number called, and the only caller answered."
+      },
+      "voiceModel": {
+        "type": "string",
+        "description": "StepFun Realtime model ID.",
+        "default": "stepaudio-3-realtime-preview"
+      },
+      "voice": {
+        "type": "string",
+        "description": "StepFun voice ID, e.g. jingdiannvsheng, wenrounansheng, qingchunshaonv.",
+        "default": "jingdiannvsheng"
+      },
+      "assistantName": {
+        "type": "string",
+        "description": "Fallback name, used only when the agent gives no persona briefing.",
+        "default": "OpenClaw"
+      },
+      "languages": {
+        "type": "string",
+        "description": "Comma-separated language codes the voice may speak and listen for, e.g. en-US, ta-IN. Empty: any language."
+      },
+      "voiceInstructions": {
+        "type": "string",
+        "description": "Your own rules for the voice: language, tone, call length."
+      },
+      "ringTimeoutSeconds": {
+        "type": "number",
+        "description": "How long an outgoing call rings before it counts as unanswered.",
+        "default": 45
+      },
+      "maxCallMinutes": {
+        "type": "number",
+        "description": "Calls end automatically after this. StepFun sessions are capped at 30 minutes.",
+        "default": 15
+      },
+      "silenceHangupSeconds": {
+        "type": "number",
+        "description": "Ends a call when nobody has spoken for this long, e.g. left on hold.",
+        "default": 180
+      },
+      "answerInbound": {
+        "type": "boolean",
+        "description": "Pick up when your number calls the bot. Other callers are never answered.",
+        "default": true
+      },
+      "sendSummary": {
+        "type": "boolean",
+        "description": "Message a short WhatsApp summary after each call.",
+        "default": true
+      },
+      "realtimeConfig": {
+        "type": "object",
+        "patternProperties": {
+          "^.*$": {}
+        },
+        "description": "Any StepFun Realtime session field, merged over the defaults. Reference: https://platform.stepfun.com/docs/zh/api-reference/realtime/chat"
+      },
+      "listen": {
+        "type": "string",
+        "description": "Loopback address of the sidecar's local API.",
+        "default": "127.0.0.1:8796"
+      },
+      "consultListen": {
+        "type": "string",
+        "description": "Loopback address the plugin's agent bridge listens on.",
+        "default": "127.0.0.1:8797"
+      },
+      "stepfunApiKey": {
+        "type": "string",
+        "description": "StepFun API key for StepAudio 3 Realtime. Falls back to the STEPFUN_API_KEY environment variable."
+      },
+      "agentId": {
+        "type": "string",
+        "description": "Which OpenClaw agent the voice consults during a call. Default: the default agent."
+      },
+      "autoStart": {
+        "type": "boolean",
+        "description": "Start the sidecar on demand when a call is requested.",
+        "default": true
+      }
+    },
+    "additionalProperties": false
+  },
+  "contracts": {
+    "tools": [
+      "whatsapp_call_owner",
+      "whatsapp_call_status"
+    ]
+  }
+}

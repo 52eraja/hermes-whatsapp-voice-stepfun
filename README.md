@@ -5,6 +5,9 @@ Live voice calls with [Hermes](https://github.com/NousResearch/hermes-agent) ove
 This fork replaces Gemini Live with **StepFun StepAudio 3 Realtime**; the WhatsApp, Hermes and call
 behavior is unchanged.
 
+The same sidecar also ships as an **OpenClaw plugin** — see [openclaw/](openclaw) and
+[Using it with OpenClaw](#using-it-with-openclaw) below.
+
 - **Call your bot.** Call your Hermes bot's WhatsApp number and talk to it. The voice agent can hand
   real work to Hermes mid-call ("move my 3pm to tomorrow", "what did Sam say about the invoice?").
 - **Let Hermes call you.** For things that matter, Hermes can ring you instead of sending a message:
@@ -195,6 +198,38 @@ instructions (language, tone, call length), and any StepFun Realtime session opt
 - A StepFun Realtime session lasts at most 30 minutes and cannot be resumed. Keep
   `max_call_minutes` below 30; the sidecar hangs up cleanly before the session expires.
 
+## Using it with OpenClaw
+
+The repo root is the Hermes plugin. [`openclaw/`](openclaw) is the same sidecar packaged as an
+OpenClaw plugin: a TypeScript extension that installs the sidecar, pairs it with WhatsApp, and adds
+two agent tools (`whatsapp_call_owner`, `whatsapp_call_status`).
+
+The Rust sidecar is shared and unchanged, so the OpenClaw port talks to StepFun exactly like the
+Hermes one. Only the "consult the agent during a call" half differs: instead of the Hermes API
+server, the plugin serves the sidecar's `/v1/runs` contract on a loopback bridge backed by
+OpenClaw's own embedded agent runtime.
+
+```bash
+cd openclaw
+npm install && npm run build
+openclaw plugins install npm:openclaw-whatsapp-voice-stepfun   # or: npm pack && openclaw plugins install <tarball>
+openclaw whatsapp-voice install     # downloads the pinned, checksum-verified sidecar binary
+openclaw whatsapp-voice pair        # link the bot's WhatsApp number (QR code, or --phone for a pair code)
+openclaw whatsapp-voice serve       # run the sidecar in the foreground
+```
+
+Set the owner's number and the agent the voice should consult:
+
+```bash
+openclaw config set plugins.entries.whatsapp-voice-stepfun.config.ownerNumber +15551234567
+openclaw config set plugins.entries.whatsapp-voice-stepfun.config.agentId main
+```
+
+`STEPFUN_API_KEY` is read from the Gateway's environment, never from the config file. Full
+reference: [openclaw/README.md](openclaw/README.md) and
+[openclaw/skills/whatsapp-voice-stepfun/SKILL.md](openclaw/skills/whatsapp-voice-stepfun/SKILL.md),
+the runbook an agent follows to set the whole thing up.
+
 ## Development
 
 ```bash
@@ -202,13 +237,16 @@ python -m pip install -r requirements-dev.txt
 ruff check . && python -m pytest tests/ -q
 cd sidecar && cargo test
 STEPFUN_API_KEY=... cargo test -- --ignored   # live round trip against StepFun
+cd openclaw && npm install && npm run check    # tsc, vitest, openclaw plugins validate
 ```
 
 Layout: the repo root is the Hermes plugin (`plugin.yaml`, `__init__.py`, `tools.py`, `cli.py`,
-`sidecar_client.py`), and `sidecar/` is the Rust sidecar. Tagging `vX.Y.Z` builds attested release
+`sidecar_client.py`), `sidecar/` is the Rust sidecar, and `openclaw/` is the OpenClaw plugin that
+ships the same sidecar. Tagging `vX.Y.Z` builds attested release
 binaries (`.github/workflows/release.yml`). Then commit the release's `SHA256SUMS` as
-`sidecar/release-checksums.txt`. Keep `version` in `plugin.yaml` and `sidecar/Cargo.toml` in step
-with the tag.
+`sidecar/release-checksums.txt` and mirror it into `openclaw/sidecar-release.json`; a unit test
+keeps the two in step. Keep `version` in `plugin.yaml`, `sidecar/Cargo.toml` and
+`openclaw/package.json` in step with the tag.
 
 ## Credits
 

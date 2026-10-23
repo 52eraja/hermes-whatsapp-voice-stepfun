@@ -1,0 +1,9 @@
+{
+  "repo": "52eraja/hermes-whatsapp-voice-stepfun",
+  "tag": "v0.2.0",
+  "checksums": {
+    "hermes-wa-voice_darwin_arm64": "f5c3358bbd17842ff7531d3b365b62f549969795dc63603364e9f31616623abc",
+    "hermes-wa-voice_linux_amd64": "395b9358bdf0dd13967e7cbc5f90cceda38ab92a523ae37dc1f678fe656c983f",
+    "hermes-wa-voice_linux_arm64": "732122ca659f8a795a79ef0b3c9298af5e8521f4db13369dd0c1a7c85be40f30"
+  }
+}

@@ -1,0 +1,60 @@
+{
+  "name": "openclaw-whatsapp-voice-stepfun",
+  "version": "0.3.0",
+  "description": "Live WhatsApp voice calls for OpenClaw, with StepFun StepAudio 3 Realtime speech-to-speech.",
+  "type": "module",
+  "license": "MIT",
+  "author": "52eraja",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/52eraja/hermes-whatsapp-voice-stepfun.git",
+    "directory": "openclaw"
+  },
+  "homepage": "https://github.com/52eraja/hermes-whatsapp-voice-stepfun/tree/main/openclaw",
+  "bugs": {
+    "url": "https://github.com/52eraja/hermes-whatsapp-voice-stepfun/issues"
+  },
+  "keywords": [
+    "openclaw",
+    "openclaw-plugin",
+    "whatsapp",
+    "voice",
+    "calls",
+    "stepfun",
+    "realtime"
+  ],
+  "files": [
+    "dist",
+    "openclaw.plugin.json",
+    "sidecar-release.json",
+    "skills",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=24.16.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "plugin:build": "npm run build && openclaw plugins build --entry ./dist/index.js",
+    "plugin:validate": "npm run build && openclaw plugins validate --entry ./dist/index.js",
+    "test": "vitest run",
+    "check": "npm run build && npm run test && npm run plugin:validate"
+  },
+  "dependencies": {
+    "typebox": "1.3.34"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "openclaw": "^2026.10.4",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.5.17"
+  },
+  "openclaw": {
+    "extensions": [
+      "./dist/index.js"
+    ]
+  }
+}
